@@ -27,10 +27,4 @@ require (
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )
 
-// replace git.q8s.co/pschlump/htotp => ../htotp
-
-// replace git.q8s.co/pschlump/ReadConfig => ../ReadConfig
-
-replace git.q8s.co/pschlump/json5 => ../json5
-
-// replace git.q8s.co/pschlump/dbgo => ../../../git.q8s.co/pschlump/dbgo
+replace git.q8s.co/pschlump/json5 => ../../../git.q8s.co/pschlump/json5
