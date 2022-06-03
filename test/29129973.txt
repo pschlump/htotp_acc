@@ -1,0 +1,3 @@
+127.0.0.1:6379> get qr2fa:29129973
+"{\"QRUrl\":\"otpauth://totp/app.example.com:bob3%40bob.com?secret=UCVCQIOR23Z2BJ3W\\u0026issuer=app.example.com\",\"UserID\":\"c004fb84-11d0-4cb5-6260-72f8ec34b73a\",\"Username\":\"bob3@bob.com\",\"Secret\":\"UCVCQIOR23Z2BJ3W\"}"
+127.0.0.1:6379>
