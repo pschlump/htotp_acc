@@ -1,6 +1,6 @@
-module git.q8s.co/pschlump/acc
+module github.com/pschlump/acc
 
-go 1.17
+go 1.18
 
 require (
 	github.com/atotto/clipboard v0.1.4

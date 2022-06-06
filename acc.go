@@ -35,6 +35,11 @@ var LogFilePattern = flag.String("log-file-pattern", "", "Use the pattern to fin
 var Version = flag.Bool("version", false, "print out version")
 var Help = flag.Bool("help", false, "Print help message")
 
+var ImportSecret = flag.String("secret", "", "16 character secret to import")
+var Name = flag.String("name", "", "name - users description of this.")
+var Issuer = flag.String("issuer", "", "issuer or Realm that this is issued on.")
+var Username = flag.String("username", "", "username")
+
 type ACConfigItem struct {
 	Name     string `json:",omitempty"`
 	Username string `json:",omitempty"`
@@ -207,6 +212,39 @@ Build Date:
 		ss := strings.Split(uu.Path, ":")
 		newCfg.Username = ss[1]
 		newCfg.Secret = qq.Get("secret")
+
+		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
+			if db8 {
+				fmt.Printf("Did not find\n")
+			}
+			gCfg.ACConfig.Local = append(gCfg.ACConfig.Local, newCfg)
+			WriteConfig(gCfg)
+		} else {
+			if db8 {
+				fmt.Printf("Found at location %d\n", pos)
+			}
+			gCfg.ACConfig.Local[pos] = newCfg
+			WriteConfig(gCfg)
+		}
+		if *IsScript {
+			fmt.Printf("%s\n", newCfg.Name)
+		} else {
+			fmt.Printf("Successfully imported %s\n", newCfg.Name)
+		}
+
+	} else if *ImportSecret != "" {
+		var newCfg ACConfigItem
+		if *Name != "" {
+			newCfg.Name = *Name
+		}
+		if *Issuer != "" {
+			newCfg.Realm = *Issuer
+		}
+		if *Username != "" {
+			newCfg.Username = *Username
+		}
+		// newCfg.Secret = qq.Get("secret")
+		newCfg.Secret = *ImportSecret
 
 		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
 			if db8 {

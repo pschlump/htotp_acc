@@ -34,6 +34,15 @@ You should be able to list the accounts and realms that are in the config file w
 $ ./acc --list
 ```
 
+## To run with a secret
+
+You can also import the secret itself.
+
+```
+$ ./acc --secret "16char-secret-value" --name "name that is is to beknow as" --username AUserToLoingWith  \
+	--issuer domainIssuingThis.com 
+```
+
 ## To generate a 2FA token
 
 Given that you have an account `/app.example.com:demo5@gmail.com` you can generate the next

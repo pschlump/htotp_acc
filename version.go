@@ -1,10 +1,10 @@
 
 package main
 
-var GitCommit string = `937a29eb9340e679f8c083214f80fe79bce8fc56
+var GitCommit string = `bf4646eccbf00538031805c8358ed9b867c7195d
 Tag: 
-v1.0.0
+v1.0.1
 Build Date: 
-Fri Oct 22 20:31:49 MDT 2021
+Mon Jun  6 14:04:28 MDT 2022
 `
 
