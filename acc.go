@@ -28,17 +28,16 @@ var List = flag.Bool("list", false, "Read the acc.cfg.json file and list the nam
 var Get2fa = flag.String("get2fa", "", "Extract a password and 1) print it, 2) send to --output 3) copy to clipboard")
 var Gen2fa = flag.String("gen2fa", "", "Fix typo")
 var IsScript = flag.Bool("is_script", false, "Skip interactive - print to stdout")
+var CreateUpdate = flag.String("create-update", "", "Create or update an entry in the acc.cfg.json file.  Speicify the UserName")
+var Secret = flag.String("secret", "", "Secret to use with a --create-upate [UserName].")
+var Issuer = flag.String("issuer", "", "Issuser/Realm to use with a --create-upate [UserName].")
+var Delete = flag.String("delete", "", "Delete an entry in the acc.cfg.json file by name.")
 var Verify = flag.String("verify", "", "Verify an existing TOTP code.")
 var Output = flag.String("output", "", "Output file to write TOTP value to.")
 var LogFilePath = flag.String("log-file-path", "", "Use the path to access a log file that will have the URL for getting the QR in it.")
 var LogFilePattern = flag.String("log-file-pattern", "", "Use the pattern to fine a URL in the log file for accessing the QR Code Image.")
 var Version = flag.Bool("version", false, "print out version")
 var Help = flag.Bool("help", false, "Print help message")
-
-var ImportSecret = flag.String("secret", "", "16 character secret to import")
-var Name = flag.String("name", "", "name - users description of this.")
-var Issuer = flag.String("issuer", "", "issuer or Realm that this is issued on.")
-var Username = flag.String("username", "", "username")
 
 type ACConfigItem struct {
 	Name     string `json:",omitempty"`
@@ -79,8 +78,14 @@ func main() {
 
 Example: 
 
-$ echo "Load a nw QR image"
-$ acc --imort SomeImageQR.png
+$ echo "Load a new QR image"
+$ acc --import SomeImageQR.png
+
+$ echo "Load a user based on name and secret"
+$ acc --create-update bob3@example.com --secret "CKDPKQHM3RWX456R" --issuer example.com
+
+$ echo "Load a user based on name and secret"
+$ acc --delete Name 
 
 $ echo "List all the configured names"
 $ acc --list
@@ -89,7 +94,7 @@ $ echo "Generate a number"
 $ acc --gen2fa /truckcoinswap.com:foo@example.com
 
 Path to Code:
-	/Users/philip/go/src/git.q8s.co/pschlump/htotp_acc
+	/Users/philip/go/src/github.com/pschlump/htotp_acc
 Build Date:
 	Tue May 31 20:49:50 MDT 2022
 `)
@@ -232,19 +237,37 @@ Build Date:
 			fmt.Printf("Successfully imported %s\n", newCfg.Name)
 		}
 
-	} else if *ImportSecret != "" {
-		var newCfg ACConfigItem
-		if *Name != "" {
-			newCfg.Name = *Name
+	} else if *CreateUpdate != "" {
+
+		// TODO
+		if *Secret == "" {
+			fmt.Fprintf(os.Stderr, "Error: --secret is required with --create-update at: %s\n", dbgo.LF())
+			os.Exit(2)
 		}
-		if *Issuer != "" {
-			newCfg.Realm = *Issuer
+		if *Issuer == "" {
+			fmt.Fprintf(os.Stderr, "Error: --issuer is required with --create-update at: %s\n", dbgo.LF())
+			os.Exit(2)
 		}
-		if *Username != "" {
-			newCfg.Username = *Username
+
+		/*
+			{
+				"Name": "/truckcoinswap.com:bob@truckcoinswap.com",
+				"Username": "bob@truckcoinswap.com",
+				"Secret": "GS2RV3HVX2LTC2PZ",
+				"Realm": "truckcoinswap.com",
+				"Digits": 0
+			}
+		*/
+		newCfg := ACConfigItem{
+			Name:     fmt.Sprintf("/%s:%s", *Issuer, *CreateUpdate),
+			Username: *CreateUpdate,
+			Secret:   *Secret,
+			Realm:    *Issuer,
+			Digits:   0,
 		}
-		// newCfg.Secret = qq.Get("secret")
-		newCfg.Secret = *ImportSecret
+		if db8 {
+			fmt.Printf("Config is: %s\n", dbgo.SVarI(newCfg))
+		}
 
 		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
 			if db8 {
@@ -252,17 +275,66 @@ Build Date:
 			}
 			gCfg.ACConfig.Local = append(gCfg.ACConfig.Local, newCfg)
 			WriteConfig(gCfg)
+			if *IsScript {
+				fmt.Printf("%s\n", newCfg.Name)
+			} else {
+				fmt.Printf("Successfully imported %s\n", newCfg.Name)
+			}
 		} else {
 			if db8 {
 				fmt.Printf("Found at location %d\n", pos)
 			}
 			gCfg.ACConfig.Local[pos] = newCfg
 			WriteConfig(gCfg)
+			if *IsScript {
+				fmt.Printf("%s\n", newCfg.Name)
+			} else {
+				fmt.Printf("Successfully updated %s\n", newCfg.Name)
+			}
 		}
-		if *IsScript {
-			fmt.Printf("%s\n", newCfg.Name)
+
+	} else if *Delete != "" {
+
+		if *Secret == "" {
+			fmt.Fprintf(os.Stderr, "Error: --secret is required with --create-update at: %s\n", dbgo.LF())
+			os.Exit(2)
+		}
+		if *Issuer == "" {
+			fmt.Fprintf(os.Stderr, "Error: --issuer is required with --create-update at: %s\n", dbgo.LF())
+			os.Exit(2)
+		}
+
+		/*
+			{
+				"Name": "/truckcoinswap.com:bob@truckcoinswap.com",
+				"Username": "bob@truckcoinswap.com",
+				"Secret": "GS2RV3HVX2LTC2PZ",
+				"Realm": "truckcoinswap.com",
+				"Digits": 0
+			}
+		*/
+		newCfg := ACConfigItem{
+			Name: fmt.Sprintf("/%s:%s", *Issuer, *CreateUpdate),
+		}
+		if db8 {
+			fmt.Printf("Config To Delete Is: %s\n", dbgo.SVarI(newCfg))
+		}
+
+		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
+			fmt.Printf("Did not find ->%s<- in file\n", newCfg.Name)
 		} else {
-			fmt.Printf("Successfully imported %s\n", newCfg.Name)
+			if db8 {
+				fmt.Printf("Found at location %d\n", pos)
+			}
+
+			gCfg.ACConfig.Local = RemoveFromSlice(gCfg.ACConfig.Local, pos)
+
+			WriteConfig(gCfg)
+			if *IsScript {
+				fmt.Printf("%s\n", newCfg.Name)
+			} else {
+				fmt.Printf("Successfully Deleted %s\n", newCfg.Name)
+			}
 		}
 
 	} else if *List {
@@ -386,6 +458,14 @@ func WriteConfig(gCfg GlobalConfigData) {
 
 func ReadLogFile(LogFilePath, LogFilePattern string) (rv string) {
 	return
+}
+
+//			gCfg.ACConfig.Local[pos] = RemoveFromSlice ( )
+// Local []ACConfigItem `json:"ac_config_item,omitempty"`
+
+func RemoveFromSlice(s []ACConfigItem, i int) []ACConfigItem {
+	s[i] = s[len(s)-1]
+	return s[:len(s)-1]
 }
 
 const db8 = false
