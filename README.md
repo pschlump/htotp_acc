@@ -39,8 +39,7 @@ $ ./acc --list
 You can also import the secret itself.
 
 ```
-$ ./acc --secret "16char-secret-value" --name "name that is is to beknow as" --username AUserToLoingWith  \
-	--issuer domainIssuingThis.com 
+$ ./acc --create-update bob@example.com --secret "16char-secret-value" --realm domainIssuingThis.com 
 ```
 
 ## To generate a 2FA token
