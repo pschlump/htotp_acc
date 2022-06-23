@@ -15,6 +15,7 @@ import (
 	"github.com/pschlump/ReadConfig"
 	"github.com/pschlump/dbgo"
 	"github.com/pschlump/filelib"
+	goTemplateTools "github.com/pschlump/go-template-tools"
 	"github.com/pschlump/htotp"
 )
 
@@ -327,7 +328,7 @@ Build Date:
 				fmt.Printf("Found at location %d\n", pos)
 			}
 
-			gCfg.ACConfig.Local = RemoveFromSlice(gCfg.ACConfig.Local, pos)
+			gCfg.ACConfig.Local = goTemplateTools.RemoveFromSlice(gCfg.ACConfig.Local, pos)
 
 			WriteConfig(gCfg)
 			if *IsScript {
@@ -458,14 +459,6 @@ func WriteConfig(gCfg GlobalConfigData) {
 
 func ReadLogFile(LogFilePath, LogFilePattern string) (rv string) {
 	return
-}
-
-//			gCfg.ACConfig.Local[pos] = RemoveFromSlice ( )
-// Local []ACConfigItem `json:"ac_config_item,omitempty"`
-
-func RemoveFromSlice(s []ACConfigItem, i int) []ACConfigItem {
-	s[i] = s[len(s)-1]
-	return s[:len(s)-1]
 }
 
 const db8 = false
