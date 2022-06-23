@@ -15,7 +15,7 @@ import (
 	"github.com/pschlump/ReadConfig"
 	"github.com/pschlump/dbgo"
 	"github.com/pschlump/filelib"
-	goTemplateTools "github.com/pschlump/go-template-tools"
+	"github.com/pschlump/goTemplateTools"
 	"github.com/pschlump/htotp"
 )
 
