@@ -31,6 +31,7 @@ var Gen2fa = flag.String("gen2fa", "", "Fix typo")
 var IsScript = flag.Bool("is_script", false, "Skip interactive - print to stdout")
 var CreateUpdate = flag.String("create-update", "", "Create or update an entry in the acc.cfg.json file.  Speicify the UserName")
 var Secret = flag.String("secret", "", "Secret to use with a --create-upate [UserName].")
+var GetSecret = flag.String("get-secret", "", "Retreive the secret for a user")
 var Issuer = flag.String("issuer", "", "Issuser/Realm to use with a --create-upate [UserName].")
 var Delete = flag.String("delete", "", "Delete an entry in the acc.cfg.json file by name.")
 var Verify = flag.String("verify", "", "Verify an existing TOTP code.")
@@ -48,6 +49,7 @@ type ACConfigItem struct {
 	Realm    string `json:",omitempty"`
 	LocalCfg bool   `json:"-"`
 	Digits   int    `json:"Digits"`
+	Notes    int    `json:"Notes,omitempty"`
 }
 
 type ACConfig struct {
@@ -402,6 +404,19 @@ Build Date:
 					}
 				}
 			}
+
+		} else {
+			fmt.Fprintf(os.Stderr, "%s not found\n", *Get2fa)
+			os.Exit(1)
+		}
+
+	} else if *GetSecret != "" {
+
+		// Search for and get item
+		if pos := InConfig(gCfg.ACConfig.Local, *GetSecret); pos != -1 {
+
+			secret := gCfg.ACConfig.Local[pos].Secret
+			fmt.Printf("%s\n", secret)
 
 		} else {
 			fmt.Fprintf(os.Stderr, "%s not found\n", *Get2fa)
