@@ -32,6 +32,7 @@ var IsScript = flag.Bool("is_script", false, "Skip interactive - print to stdout
 var CreateUpdate = flag.String("create-update", "", "Create or update an entry in the acc.cfg.json file.  Speicify the UserName")
 var Secret = flag.String("secret", "", "Secret to use with a --create-upate [UserName].")
 var GetSecret = flag.String("get-secret", "", "Retreive the secret for a user")
+var CreateNewSecret = flag.Bool("create-new-secret", false, "Create a new TOTP secrent - random value")
 var Issuer = flag.String("issuer", "", "Issuser/Realm to use with a --create-upate [UserName].")
 var Delete = flag.String("delete", "", "Delete an entry in the acc.cfg.json file by name.")
 var Verify = flag.String("verify", "", "Verify an existing TOTP code.")
@@ -75,7 +76,7 @@ func init() {
 func main() {
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "REST_Easy : Usage: %s [flags]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "acc : Usage: %s [flags]\n", os.Args[0])
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 
@@ -96,10 +97,12 @@ $ acc --list
 $ echo "Generate a number"
 $ acc --gen2fa /truckcoinswap.com:foo@example.com
 
-Path to Code:
-	/Users/philip/go/src/github.com/pschlump/htotp_acc
-Build Date:
-	Tue May 31 20:49:50 MDT 2022
+Notes:
+
+	Path to Code:
+		.../go/src/github.com/pschlump/htotp_acc
+	Build Date:
+		Mon Sep 19 07:24:19 MDT 2022
 `)
 	}
 
@@ -422,6 +425,11 @@ Build Date:
 			fmt.Fprintf(os.Stderr, "%s not found\n", *Get2fa)
 			os.Exit(1)
 		}
+
+	} else if *CreateNewSecret {
+
+		secret := htotp.RandomSecret(16)
+		fmt.Printf("Secret: %s\n", secret)
 
 	} else {
 
