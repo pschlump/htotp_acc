@@ -21,3 +21,5 @@ htotp_acc
 acc
 62f4158367.png
 acc.cfg.json
+tcs.mk
+acc_linux

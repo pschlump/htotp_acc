@@ -381,6 +381,10 @@ Notes:
 					if *IsScript {
 						fmt.Printf("%s\n", pin)
 					} else {
+						// copy to cliboard so you can paste the PIN
+						if err := clipboard.WriteAll(pin); err != nil {
+							fmt.Fprintf(os.Stderr, "Failed to copy to clipboard! %s\n", err)
+						}
 						fmt.Printf("%s2fa Key: %s%s%s for user %s%s\n", dbgo.ColorCyan, dbgo.ColorYellow, pin, dbgo.ColorCyan, un, dbgo.ColorReset)
 						fmt.Printf("   ** Has been copied to clipboard **\n")
 						if tl < 10 {
