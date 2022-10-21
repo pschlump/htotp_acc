@@ -9,6 +9,9 @@ all:
 	go run gen/main.go > version.go
 	go build
 
+linux:
+	GOOS=linux GOARCH=amd64 go build -o acc_linux
+
 # This is kind of a full run of what the CLI Authenticator can do.
 run_all: import_qr_code gen_2fa_otk validate_otk get_list_sites
 
