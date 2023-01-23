@@ -1,5 +1,8 @@
 package main
 
+// PJSenc xyzzy
+// xyzzy - TODO xyzzy800 - fix error
+
 import (
 	"flag"
 	"fmt"
@@ -41,6 +44,7 @@ var LogFilePath = flag.String("log-file-path", "", "Use the path to access a log
 var LogFilePattern = flag.String("log-file-pattern", "", "Use the pattern to fine a URL in the log file for accessing the QR Code Image.")
 var Version = flag.Bool("version", false, "print out version")
 var Help = flag.Bool("help", false, "Print help message")
+var Encrypted = flag.String("encrypted", "", "If Specified is the Encrypted Password.") // PJSenc xyzzy
 
 type ACConfigItem struct {
 	Name     string `json:",omitempty"`
@@ -59,9 +63,11 @@ type ACConfig struct {
 
 type GlobalConfigData struct {
 	ACConfig
-	Encrypted string `json:",omitempty"`
-	Data      string `json:",omitempty"`
-	DebugFlag string `json:"db_flag,omitempty"`
+	Encrypted         string `json:",omitempty"`
+	EncryptedData     string `json:"encrypted_data,omitempty"` // PJSenc xyzzy
+	Data              string `json:",omitempty"`
+	WrittenAtTimstamp string `json:",omitempty"`
+	DebugFlag         string `json:"db_flag,omitempty"`
 }
 
 var gCfg GlobalConfigData
@@ -134,18 +140,40 @@ Notes:
 
 	if !filelib.Exists(*Cfg) {
 		fmt.Printf("Warning: creating new config file: %s\n", *Cfg)
-		ioutil.WriteFile(*Cfg, []byte(`{"ac_config_item":[]}`), 0600)
+		if *Encrypted != "" {
+			EncryptedData := ""
+			// func EncryptString(plaintext []byte, keyString string) (encryptedString string, err error) {
+			EncryptedData, err := EncryptString([]byte(EncryptedData), *Encrypted) // PJSenc xyzzy - encrypt empty data.
+			if err != nil {
+				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data: %s\n", err)
+				os.Exit(1)
+			}
+			err = ioutil.WriteFile(*Cfg, []byte(fmt.Sprintf(`{"ac_config_item":[],"encrypted_data":%q,"encrypted":"y"}`, EncryptedData)), 0600) // PJSenc xyzzy
+			if err != nil {
+				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data file: %s Error:%s\n", *Cfg, err)
+				os.Exit(1)
+			}
+		} else {
+			err := ioutil.WriteFile(*Cfg, []byte(`{"ac_config_item":[]}`), 0600)
+			if err != nil {
+				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data file: %s Error:%s\n", *Cfg, err)
+				os.Exit(1)
+			}
+		}
 	}
 
 	// ------------------------------------------------------------------------------
 	// Read in Configuraiton
 	// ------------------------------------------------------------------------------
-	// err := ReadConfig.ReadEncryptedFile(*Cfg, *PromptPassword, *Password, &gCfg)
 	err := ReadConfig.ReadFile(*Cfg, &gCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to read configuration: %s error %s\n", *Cfg, err)
 		os.Exit(1)
 	}
+
+	// PJSenc xyzzy - if encrypted, then requrie the *Encrypted flag
+	// PJSenc xyzzy - Decrypt data
+	// 		func DecryptString(encryptedString string, keyString string) (decrypted []byte, err error) {
 
 	// ------------------------------------------------------------------------------
 	// Debug Flag Processing
@@ -179,6 +207,12 @@ Notes:
 	// var List = flag.Bool("list", false, "Read the ~/.ac.* file and list the names of the keys")
 	// var Get2fa = flag.String("list", "", "Extract a password and 1) print it, 2) send to --output 3) copy to clipboard")
 
+	// -----------------------------------------------------------------------------------------------------------------------
+	// The intent here is to read a log-file and pull out the secret out of the log (so you don't need the .png or .svg of
+	// the QR code) - and use that to setup a new HTOP set of data.
+	//
+	// Add in a "extract" pattern - to pull out the data.
+	// -----------------------------------------------------------------------------------------------------------------------
 	if *LogFilePath != "" {
 		if *LogFilePattern == "" {
 			fmt.Fprintf(os.Stderr, "Must supply both --log-file-path <file-name> and --log-file-pattern \"pattern\" together\n")
@@ -472,10 +506,31 @@ func InConfig(cc []ACConfigItem, name string) (pos int) {
 // WriteConfig ( gCfg )
 func WriteConfig(gCfg GlobalConfigData) {
 	fn := *Cfg
+
 	// TODO - backup original!
+	BackupFile(fn, ".%s.bck.%%03d")
+
+	// PJSenc xyzzy - if *Encrypted -> encrypt data -> remove non-encrytped
+	// 			func EncryptString(plaintext []byte, keyString string) (encryptedString string, err error) {
+	if *Encrypted != "" {
+		if db8 {
+			fmt.Fprintf(os.Stderr, "Encrypted text\n")
+		}
+		plaintext := dbgo.SVar(gCfg.Local)
+		// func EncryptString(plaintext []byte, keyString string) (encryptedString string, err error) {
+		enctext, err := EncryptString([]byte(plaintext), *Encrypted)
+		if err != nil {
+			// xyzzy - TODO xyzzy800 - fix error
+		}
+		gCfg.Local = []ACConfigItem{}
+		gCfg.EncryptedData = enctext
+		gCfg.Encrypted = "y"
+	}
+
 	if db8 {
 		fmt.Fprintf(os.Stderr, "Raw ->%s<- to file %s\n", dbgo.SVarI(gCfg), fn)
 	}
+	//	gCfg.WrittenAtTimstamp = xxxxx
 	err := ioutil.WriteFile(fn, []byte(dbgo.SVarI(gCfg)), 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error on write file: %s error: %s\n", fn, err)
@@ -486,6 +541,13 @@ func WriteConfig(gCfg GlobalConfigData) {
 
 func ReadLogFile(LogFilePath, LogFilePattern string) (rv string) {
 	return
+}
+
+func BackupFile(fn, fn_pat string) {
+	// List files - find max.
+	// add 1
+	// fn_pat - generate new based on max+1
+	// Copy fn -> new file
 }
 
 const db8 = false

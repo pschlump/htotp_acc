@@ -44,3 +44,7 @@ InitialSetup:
 	git branch -M main
 	git remote add origin https://github.com/pschlump/htotp_acc.git
 	git push -u origin main
+
+
+deploy: linux
+	scp acc_linux philip@45.79.53.54:/home/philip/tmp/acc
