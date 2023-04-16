@@ -1,14 +1,14 @@
 module github.com/pschlump/acc
 
-go 1.18
+go 1.19
 
 require (
 	github.com/atotto/clipboard v0.1.4
-	github.com/pschlump/ReadConfig v1.0.2
-	github.com/pschlump/dbgo v1.0.3
+	github.com/pschlump/ReadConfig v1.0.5
+	github.com/pschlump/dbgo v1.0.6
 	github.com/pschlump/filelib v1.0.6
 	github.com/pschlump/goTemplateTools v1.0.0
-	github.com/pschlump/htotp v1.0.0
+	github.com/pschlump/htotp v1.0.2
 )
 
 require (
