@@ -21,13 +21,11 @@ test:
 # This is kind of a full run of what the CLI Authenticator can do.
 run_all: import_qr_code gen_2fa_otk validate_otk get_list_sites
 
-gen_2fa_otk:
-	./acc --get2fa "/www.2c-why.com:pschlump@gmail.com"
-
 validate_otk:
 	mkdir -p ./out
 	./acc --get2fa "/www.2c-why.com:pschlump@gmail.com" --output ./out/,otk
 	./acc --get2fa "/www.2c-why.com:pschlump@gmail.com" --verify `cat ./out/,otk`
+	rm -f ./out/,otk
 
 get_list_sites:
 	./acc --list
@@ -39,21 +37,19 @@ register_001:
 	./acc --import xyzzy.png
 
 install:
-	cp acc ~/bin
+	( cd ~/bin ; rm -f acc )
+	( cd ~/bin ; ln -s ../go/src/github.com/pschlump/htotp_acc/acc . )
 
 
-InitialSetup:
-	echo "# htotp_acc" >> README.md
-	git init
-	git add README.md
-	git commit -m "first commit"
-	git branch -M main
-	git remote add origin https://github.com/pschlump/htotp_acc.git
-	git push -u origin main
+#InitialSetup:
+#	echo "# htotp_acc" >> README.md
+#	git init
+#	git add README.md
+#	git commit -m "first commit"
+#	git branch -M main
+#	git remote add origin https://github.com/pschlump/htotp_acc.git
+#	git push -u origin main
 
-
-deploy: linux
-	scp acc_linux philip@45.79.53.54:/home/philip/tmp/acc
 
 ## git bump tag
 git_set_tag:
