@@ -4,7 +4,7 @@ go 1.22.0
 
 require (
 	github.com/atotto/clipboard v0.1.4
-	github.com/pschlump/ReadConfig v1.0.8
+	github.com/pschlump/ReadConfig v1.0.11
 	github.com/pschlump/dbgo v1.0.8
 	github.com/pschlump/filelib v1.0.12
 	github.com/pschlump/goTemplateTools v1.0.0

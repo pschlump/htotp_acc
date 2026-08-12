@@ -1,4 +1,6 @@
 
+.PHONY: all linux test run_all gen_2fa_otk validate_otk get_list_sites import_qr_code register_001 install deploy
+
 all:
 	mkdir -p tmp
 	git rev-list -1 HEAD >tmp/,ver
@@ -11,6 +13,10 @@ all:
 
 linux:
 	GOOS=linux GOARCH=amd64 go build -o acc_linux
+
+test:
+	go vet ./...
+	go test ./...
 
 # This is kind of a full run of what the CLI Authenticator can do.
 run_all: import_qr_code gen_2fa_otk validate_otk get_list_sites

@@ -4,6 +4,7 @@ package main
 // xyzzy - TODO xyzzy800 - fix error
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	_ "image/jpeg"
@@ -11,6 +12,8 @@ import (
 	"io/ioutil"
 	"net/url"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,7 +27,7 @@ import (
 
 // xyzzy4040 - need to pull back file from server.
 
-var Cfg = flag.String("cfg", "acc.cfg.json", "config file for this program - this is where your secret is saved.")
+var Cfg = flag.String("cfg", envOr("ACC_CFG", "acc.cfg.json"), "config file for this program - this is where your secret is saved. Defaults to $ACC_CFG if set.")
 var DbFlag = flag.String("db_flag", "", "Additional Debug Flags")
 
 var Import = flag.String("import", "", "Import a .png QR Code - setup for a new site or update an existing site.")
@@ -34,6 +37,7 @@ var Gen2fa = flag.String("gen2fa", "", "Fix typo")
 var IsScript = flag.Bool("is_script", false, "Skip interactive - print to stdout")
 var CreateUpdate = flag.String("create-update", "", "Create or update an entry in the acc.cfg.json file.  Speicify the UserName")
 var Secret = flag.String("secret", "", "Secret to use with a --create-upate [UserName].")
+var Password = flag.String("password", "", "Password to store with a --create-update/--enroll entry (used by --sudo-pipe).")
 var GetSecret = flag.String("get-secret", "", "Retreive the secret for a user")
 var CreateNewSecret = flag.Bool("create-new-secret", false, "Create a new TOTP secrent - random value")
 var Issuer = flag.String("issuer", "", "Issuser/Realm to use with a --create-upate [UserName].")
@@ -44,7 +48,21 @@ var LogFilePath = flag.String("log-file-path", "", "Use the path to access a log
 var LogFilePattern = flag.String("log-file-pattern", "", "Use the pattern to fine a URL in the log file for accessing the QR Code Image.")
 var Version = flag.Bool("version", false, "print out version")
 var Help = flag.Bool("help", false, "Print help message")
-var Encrypted = flag.String("encrypted", "", "If Specified is the Encrypted Password.") // PJSenc xyzzy
+var Encrypted = flag.String("encrypted", "", "Password for the encrypted config. Defaults to $ACC_ENCRYPT_PW if set.")
+var MinTTL = flag.Uint("min-ttl", 0, "With --get2fa/--sudo-pipe: if fewer than this many seconds remain on the code, wait for the next window and generate a fresh one.")
+var ShowTTL = flag.Bool("show-ttl", false, "With --get2fa --is_script: print '<code> <seconds-left>'.")
+var SudoPipe = flag.String("sudo-pipe", "", "Print '<password>\\n<totp>\\n' for the entry - pipe to 'sudo -S' (e.g. via ssh).")
+var Enroll = flag.String("enroll", "", "Enroll a new user: generate a random secret, store the entry, print the provisioning URI. Requires --issuer.")
+var QR = flag.String("qr", "", "With --enroll: also write a QR code .png of the provisioning URI to this file.")
+var CheckTime = flag.String("check-time", "", "Compare the local clock with <host> (via ssh) to detect TOTP clock skew.")
+
+// envOr returns the value of the named environment variable, or def if unset/empty.
+func envOr(name, def string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return def
+}
 
 type ACConfigItem struct {
 	Name     string `json:",omitempty"`
@@ -73,6 +91,10 @@ type GlobalConfigData struct {
 var gCfg GlobalConfigData
 var db_flag map[string]bool
 var logFilePtr *os.File
+
+// encPassword is the resolved config-encryption password: --encrypted flag,
+// or $ACC_ENCRYPT_PW if the flag is not given.
+var encPassword string
 
 func init() {
 	logFilePtr = os.Stderr
@@ -103,7 +125,16 @@ $ acc --list
 $ echo "Generate a number"
 $ acc --gen2fa /truckcoinswap.com:foo@example.com
 
+$ echo "Enroll a new user (generate secret, store entry, print URI)"
+$ acc --enroll phil --issuer myserver
+
+$ echo "Pipe password + TOTP code into sudo over ssh"
+$ acc --sudo-pipe myserver | ssh phil@myserver 'sudo -S id'
+
 Notes:
+
+	Config file defaults to $ACC_CFG (or ./acc.cfg.json).
+	Encryption password defaults to $ACC_ENCRYPT_PW (or --encrypted).
 
 	Path to Code:
 		.../go/src/github.com/pschlump/htotp_acc
@@ -138,17 +169,21 @@ Notes:
 		os.Exit(0)
 	}
 
+	// Resolve the config-encryption password: flag wins, then the environment.
+	encPassword = *Encrypted
+	if encPassword == "" {
+		encPassword = os.Getenv("ACC_ENCRYPT_PW")
+	}
+
 	if !filelib.Exists(*Cfg) {
 		fmt.Printf("Warning: creating new config file: %s\n", *Cfg)
-		if *Encrypted != "" {
-			EncryptedData := ""
-			// func EncryptString(plaintext []byte, keyString string) (encryptedString string, err error) {
-			EncryptedData, err := EncryptString([]byte(EncryptedData), *Encrypted) // PJSenc xyzzy - encrypt empty data.
+		if encPassword != "" {
+			encData, err := EncryptString([]byte("[]"), encPassword) // encrypted empty entry list
 			if err != nil {
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data: %s\n", err)
 				os.Exit(1)
 			}
-			err = ioutil.WriteFile(*Cfg, []byte(fmt.Sprintf(`{"ac_config_item":[],"encrypted_data":%q,"encrypted":"y"}`, EncryptedData)), 0600) // PJSenc xyzzy
+			err = ioutil.WriteFile(*Cfg, []byte(fmt.Sprintf(`{"ac_config_item":[],"encrypted_data":%q,"encrypted":"y"}`, encData)), 0600)
 			if err != nil {
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data file: %s Error:%s\n", *Cfg, err)
 				os.Exit(1)
@@ -171,9 +206,25 @@ Notes:
 		os.Exit(1)
 	}
 
-	// PJSenc xyzzy - if encrypted, then requrie the *Encrypted flag
-	// PJSenc xyzzy - Decrypt data
-	// 		func DecryptString(encryptedString string, keyString string) (decrypted []byte, err error) {
+	// ------------------------------------------------------------------------------
+	// If the config is encrypted, decrypt the entry list (requires the password
+	// from --encrypted or $ACC_ENCRYPT_PW).
+	// ------------------------------------------------------------------------------
+	if gCfg.Encrypted == "y" || gCfg.EncryptedData != "" {
+		if encPassword == "" {
+			fmt.Fprintf(os.Stderr, "Config file %s is encrypted: supply the password via --encrypted or $ACC_ENCRYPT_PW\n", *Cfg)
+			os.Exit(1)
+		}
+		dec, err := DecryptString(gCfg.EncryptedData, encPassword)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Unable to decrypt configuration: %s (wrong password?)\n", err)
+			os.Exit(1)
+		}
+		if err := json.Unmarshal(dec, &gCfg.ACConfig.Local); err != nil {
+			fmt.Fprintf(os.Stderr, "Unable to parse decrypted configuration: %s\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// ------------------------------------------------------------------------------
 	// Debug Flag Processing
@@ -254,8 +305,12 @@ Notes:
 		newCfg.Name = uu.Path
 		qq := uu.Query()
 		newCfg.Realm = qq.Get("issuer")
-		ss := strings.Split(uu.Path, ":")
-		newCfg.Username = ss[1]
+		ss := strings.SplitN(uu.Path, ":", 2)
+		if len(ss) == 2 {
+			newCfg.Username = ss[1]
+		} else {
+			newCfg.Username = strings.TrimPrefix(uu.Path, "/")
+		}
 		newCfg.Secret = qq.Get("secret")
 
 		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
@@ -301,6 +356,7 @@ Notes:
 		newCfg := ACConfigItem{
 			Name:     fmt.Sprintf("/%s:%s", *Issuer, *CreateUpdate),
 			Username: *CreateUpdate,
+			Password: *Password,
 			Secret:   *Secret,
 			Realm:    *Issuer,
 			Digits:   0,
@@ -335,38 +391,21 @@ Notes:
 
 	} else if *Delete != "" {
 
-		if *Secret == "" {
-			fmt.Fprintf(os.Stderr, "Error: --secret is required with --create-update at: %s\n", dbgo.LF())
-			os.Exit(2)
-		}
-		if *Issuer == "" {
-			fmt.Fprintf(os.Stderr, "Error: --issuer is required with --create-update at: %s\n", dbgo.LF())
-			os.Exit(2)
-		}
-
-		/*
-			{
-				"Name": "/truckcoinswap.com:bob@truckcoinswap.com",
-				"Username": "bob@truckcoinswap.com",
-				"Secret": "GS2RV3HVX2LTC2PZ",
-				"Realm": "truckcoinswap.com",
-				"Digits": 0
-			}
-		*/
 		newCfg := ACConfigItem{
-			Name: fmt.Sprintf("/%s:%s", *Issuer, *CreateUpdate),
+			Name: *Delete,
 		}
 		if db8 {
 			fmt.Printf("Config To Delete Is: %s\n", dbgo.SVarI(newCfg))
 		}
 
-		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
+		if pos, err := ResolveName(gCfg.ACConfig.Local, newCfg.Name); err != nil {
 			fmt.Printf("Did not find ->%s<- in file\n", newCfg.Name)
 		} else {
 			if db8 {
 				fmt.Printf("Found at location %d\n", pos)
 			}
 
+			newCfg.Name = gCfg.ACConfig.Local[pos].Name
 			gCfg.ACConfig.Local = goTemplateTools.RemoveFromSlice(gCfg.ACConfig.Local, pos)
 
 			WriteConfig(gCfg)
@@ -392,7 +431,7 @@ Notes:
 		var tl uint
 
 		// Search for and get item
-		if pos := InConfig(gCfg.ACConfig.Local, *Get2fa); pos != -1 {
+		if pos, err := ResolveName(gCfg.ACConfig.Local, *Get2fa); err == nil {
 			if db8 {
 				fmt.Printf("%s\n", gCfg.ACConfig.Local[pos].Password)
 			}
@@ -408,12 +447,16 @@ Notes:
 					fmt.Printf("%sFailed To Verifiy: %s with user %s%s\n", dbgo.ColorRed, pin, un, dbgo.ColorReset)
 				}
 			} else {
-				pin, tl = htotp.GenerateRfc6238TOTPKeyTL(un, secret) // generate TOTP key
+				pin, tl = genWithMinTTL(un, secret, uint(*MinTTL)) // generate TOTP key
 				if *Output != "" {
 					ioutil.WriteFile(*Output, []byte(fmt.Sprintf("%s\n", pin)), 0644)
 				} else {
 					if *IsScript {
-						fmt.Printf("%s\n", pin)
+						if *ShowTTL {
+							fmt.Printf("%s %d\n", pin, tl)
+						} else {
+							fmt.Printf("%s\n", pin)
+						}
 					} else {
 						// copy to cliboard so you can paste the PIN
 						if err := clipboard.WriteAll(pin); err != nil {
@@ -447,20 +490,89 @@ Notes:
 			}
 
 		} else {
-			fmt.Fprintf(os.Stderr, "%s not found\n", *Get2fa)
+			fmt.Fprintf(os.Stderr, "%s\n", err)
+			os.Exit(1)
+		}
+
+	} else if *SudoPipe != "" {
+
+		// Print "<password>\n<totp>\n" for piping into 'sudo -S'.
+		if pos, err := ResolveName(gCfg.ACConfig.Local, *SudoPipe); err == nil {
+			entry := gCfg.ACConfig.Local[pos]
+			pin, _ := genWithMinTTL(entry.Username, entry.Secret, uint(*MinTTL))
+			fmt.Printf("%s\n%s\n", entry.Password, pin)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s\n", err)
+			os.Exit(1)
+		}
+
+	} else if *Enroll != "" {
+
+		if *Issuer == "" {
+			fmt.Fprintf(os.Stderr, "Error: --issuer is required with --enroll at: %s\n", dbgo.LF())
+			os.Exit(2)
+		}
+		secret := htotp.RandomSecret(16)
+		newCfg := ACConfigItem{
+			Name:     fmt.Sprintf("/%s:%s", *Issuer, *Enroll),
+			Username: *Enroll,
+			Password: *Password,
+			Secret:   secret,
+			Realm:    *Issuer,
+			Digits:   0,
+		}
+		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
+			gCfg.ACConfig.Local = append(gCfg.ACConfig.Local, newCfg)
+		} else {
+			gCfg.ACConfig.Local[pos] = newCfg
+		}
+		WriteConfig(gCfg)
+
+		uri := htotp.NewDefaultTOTP(secret).ProvisioningUri(*Enroll, *Issuer)
+		fmt.Printf("Name: %s\n", newCfg.Name)
+		fmt.Printf("Secret: %s\n", secret)
+		fmt.Printf("URI: %s\n", uri)
+		fmt.Printf("\nOn the server, run 'google-authenticator' and enter this secret, or put this line\n")
+		fmt.Printf("in ~%s/.google_authenticator:\n\n\t%s\n", *Enroll, secret)
+		if *QR != "" {
+			htotp.GenerateQRCodeFromURI(uri, *QR)
+			fmt.Printf("\nQR code written to: %s\n", *QR)
+		}
+
+	} else if *CheckTime != "" {
+
+		out, err := exec.Command("ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", *CheckTime, "date +%s").Output()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Unable to get time from %s via ssh: %s\n", *CheckTime, err)
+			os.Exit(1)
+		}
+		remote, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Unable to parse time from %s: %q\n", *CheckTime, strings.TrimSpace(string(out)))
+			os.Exit(1)
+		}
+		local := time.Now().Unix()
+		diff := local - remote
+		abs := diff
+		if abs < 0 {
+			abs = -abs
+		}
+		fmt.Printf("Local: %d  Remote(%s): %d  Skew: %+d seconds\n", local, *CheckTime, remote, diff)
+		if abs > 2 {
+			fmt.Fprintf(os.Stderr, "WARNING: clock skew of %d seconds will cause TOTP failures (sync clocks with NTP)\n", abs)
 			os.Exit(1)
 		}
 
 	} else if *GetSecret != "" {
 
 		// Search for and get item
-		if pos := InConfig(gCfg.ACConfig.Local, *GetSecret); pos != -1 {
+		if pos, err := ResolveName(gCfg.ACConfig.Local, *GetSecret); err == nil {
 
 			secret := gCfg.ACConfig.Local[pos].Secret
 			fmt.Printf("%s\n", secret)
 
 		} else {
-			fmt.Fprintf(os.Stderr, "%s not found\n", *Get2fa)
+			fmt.Fprintf(os.Stderr, "%s\n", err)
 			os.Exit(1)
 		}
 
@@ -485,14 +597,14 @@ func Usage(fatal bool) {
 
 // if pos := InConfig(gCfg.ACConfig, newCfg.Name); pos != -1 {
 func InConfig(cc []ACConfigItem, name string) (pos int) {
-	if name[0:1] == "/" {
+	if len(name) > 0 && name[0:1] == "/" {
 		name = name[1:]
 	}
 	pos = -1
 	for ii, vv := range cc {
 
 		nn := vv.Name
-		if nn[0:1] == "/" {
+		if len(nn) > 0 && nn[0:1] == "/" {
 			nn = nn[1:]
 		}
 
@@ -510,17 +622,21 @@ func WriteConfig(gCfg GlobalConfigData) {
 	// TODO - backup original!
 	BackupFile(fn, ".%s.bck.%%03d")
 
-	// PJSenc xyzzy - if *Encrypted -> encrypt data -> remove non-encrytped
-	// 			func EncryptString(plaintext []byte, keyString string) (encryptedString string, err error) {
-	if *Encrypted != "" {
+	// If an encryption password is configured (--encrypted or $ACC_ENCRYPT_PW),
+	// store the entry list as an encrypted JSON blob and clear the plaintext.
+	if encPassword != "" {
 		if db8 {
 			fmt.Fprintf(os.Stderr, "Encrypted text\n")
 		}
-		plaintext := dbgo.SVar(gCfg.Local)
-		// func EncryptString(plaintext []byte, keyString string) (encryptedString string, err error) {
-		enctext, err := EncryptString([]byte(plaintext), *Encrypted)
+		plaintext, err := json.Marshal(gCfg.Local)
 		if err != nil {
-			// xyzzy - TODO xyzzy800 - fix error
+			fmt.Fprintf(os.Stderr, "Error on marshal config: %s\n", err)
+			os.Exit(1)
+		}
+		enctext, err := EncryptString(plaintext, encPassword)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error on encrypt config: %s\n", err)
+			os.Exit(1)
 		}
 		gCfg.Local = []ACConfigItem{}
 		gCfg.EncryptedData = enctext
@@ -536,6 +652,54 @@ func WriteConfig(gCfg GlobalConfigData) {
 		fmt.Fprintf(os.Stderr, "Error on write file: %s error: %s\n", fn, err)
 		fmt.Fprintf(os.Stderr, "Failed to import!\n")
 		os.Exit(1)
+	}
+}
+
+// ResolveName finds an entry by exact name (with or without the leading "/"),
+// falling back to a unique case-sensitive substring match. It returns an error
+// when the name is not found or the substring is ambiguous.
+func ResolveName(cc []ACConfigItem, name string) (pos int, err error) {
+	if pos = InConfig(cc, name); pos != -1 {
+		return pos, nil
+	}
+
+	query := strings.TrimPrefix(name, "/")
+	if query == "" {
+		return -1, fmt.Errorf("%s not found", name)
+	}
+	var matches []int
+	for ii, vv := range cc {
+		if strings.Contains(strings.TrimPrefix(vv.Name, "/"), query) {
+			matches = append(matches, ii)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return -1, fmt.Errorf("%s not found", name)
+	case 1:
+		return matches[0], nil
+	default:
+		names := make([]string, 0, len(matches))
+		for _, ii := range matches {
+			names = append(names, cc[ii].Name)
+		}
+		return -1, fmt.Errorf("%s is ambiguous, matches: %s", name, strings.Join(names, ", "))
+	}
+}
+
+// genWithMinTTL generates a TOTP code, waiting for the next 30-second window
+// if fewer than minTTL seconds remain on the current one.
+func genWithMinTTL(un, secret string, minTTL uint) (pin string, tl uint) {
+	for {
+		pin, tl = htotp.GenerateRfc6238TOTPKeyTL(un, secret)
+		if tl >= minTTL && tl > 0 {
+			return
+		}
+		d := tl
+		if d == 0 {
+			d = 1
+		}
+		time.Sleep(time.Duration(d) * time.Second)
 	}
 }
 
