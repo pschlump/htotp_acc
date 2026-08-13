@@ -55,7 +55,7 @@ install:
 git_set_tag:
 	git commit -a -m "Before Version Bump"
 	git push
-	git tag v1.0.11
+	git tag v1.0.12
 	git push origin --tags
 	$(MAKE) all
 	git add -A .
