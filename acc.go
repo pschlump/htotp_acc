@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/pschlump/dbgo"
 	"github.com/pschlump/filelib"
 	"github.com/pschlump/goTemplateTools"
+	"github.com/pschlump/goqrcode"
 	"github.com/pschlump/htotp"
 )
 
@@ -54,6 +56,9 @@ var ShowTTL = flag.Bool("show-ttl", false, "With --get2fa --is_script: print '<c
 var SudoPipe = flag.String("sudo-pipe", "", "Print '<password>\\n<totp>\\n' for the entry - pipe to 'sudo -S' (e.g. via ssh).")
 var Enroll = flag.String("enroll", "", "Enroll a new user: generate a random secret, store the entry, print the provisioning URI. Requires --issuer.")
 var QR = flag.String("qr", "", "With --enroll: also write a QR code .png of the provisioning URI to this file.")
+var GenQR = flag.String("gen-qr", "", "Generate a scannable QR code for the named entry's provisioning URI. Prints terminal art by default; use --qr-file to write a PNG.")
+var QRFile = flag.String("qr-file", "", "With --gen-qr: write the QR code as a PNG to this file (and open it if --qr-view is set).")
+var QRView = flag.Bool("qr-view", false, "With --gen-qr --qr-file: open the PNG with the system viewer (Preview on macOS).")
 var CheckTime = flag.String("check-time", "", "Compare the local clock with <host> (via ssh) to detect TOTP clock skew.")
 
 // envOr returns the value of the named environment variable, or def if unset/empty.
@@ -127,6 +132,12 @@ $ acc --gen2fa /truckcoinswap.com:foo@example.com
 
 $ echo "Enroll a new user (generate secret, store entry, print URI)"
 $ acc --enroll phil --issuer myserver
+
+$ echo "Print a scannable QR code for an existing entry (terminal art)"
+$ acc --gen-qr myserver
+
+$ echo "Write the QR as a PNG and open it in Preview"
+$ acc --gen-qr myserver --qr-file myserver.png --qr-view
 
 $ echo "Pipe password + TOTP code into sudo over ssh"
 $ acc --sudo-pipe myserver | ssh phil@myserver 'sudo -S id'
@@ -581,6 +592,64 @@ Notes:
 		secret := htotp.RandomSecret(16)
 		fmt.Printf("Secret: %s\n", secret)
 
+	} else if *GenQR != "" {
+
+		// Generate a scannable QR code for an existing entry's provisioning
+		// URI.  By default the QR is printed as terminal art; --qr-file writes
+		// a PNG (which scans far more reliably) and --qr-view opens it.
+		if pos, err := ResolveName(gCfg.ACConfig.Local, *GenQR); err == nil {
+			entry := gCfg.ACConfig.Local[pos]
+
+			// Reconstruct the otpauth:// URI from the stored entry, matching
+			// the format produced by --enroll / --create-update.
+			account := entry.Username
+			issuer := entry.Realm
+			label := strings.TrimPrefix(entry.Name, "/")
+			if issuer == "" {
+				if ss := strings.SplitN(label, ":", 2); len(ss) == 2 {
+					issuer = ss[0]
+				} else {
+					issuer = label
+				}
+			}
+			if account == "" {
+				if ss := strings.SplitN(label, ":", 2); len(ss) == 2 {
+					account = ss[1]
+				} else {
+					account = label
+				}
+			}
+			uri := htotp.NewDefaultTOTP(entry.Secret).ProvisioningUri(account, issuer)
+
+			q, err := goqrcode.New(uri, goqrcode.Medium)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error generating QR code: %s\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("URI: %s\n", uri)
+			if *QRFile != "" {
+				if err := q.WriteFile(256, *QRFile); err != nil {
+					fmt.Fprintf(os.Stderr, "Error writing QR PNG to %s: %s\n", *QRFile, err)
+					os.Exit(1)
+				}
+				fmt.Printf("QR code written to: %s\n", *QRFile)
+				if *QRView {
+					if err := openFile(*QRFile); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: unable to open %s: %s\n", *QRFile, err)
+					}
+				}
+			} else {
+				// Compact terminal art; widen your terminal (or use --qr-file)
+				// if it wraps or will not scan.
+				fmt.Println()
+				fmt.Print(q.ToSmallString(false))
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "%s\n", err)
+			os.Exit(1)
+		}
+
 	} else {
 
 		fmt.Fprintf(os.Stderr, "Invalid options - probably not implemented yet.\n")
@@ -712,6 +781,18 @@ func BackupFile(fn, fn_pat string) {
 	// add 1
 	// fn_pat - generate new based on max+1
 	// Copy fn -> new file
+}
+
+// openFile opens a file with the platform's default GUI viewer (Preview on
+// macOS, xdg-open elsewhere). Used by --gen-qr --qr-view.
+func openFile(fn string) error {
+	var bin string
+	if runtime.GOOS == "darwin" {
+		bin = "open"
+	} else {
+		bin = "xdg-open"
+	}
+	return exec.Command(bin, fn).Run()
 }
 
 const db8 = false

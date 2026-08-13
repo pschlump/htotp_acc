@@ -134,6 +134,31 @@ URI: otpauth://totp/myserver:phil?secret=VZNZS2YL75EWJSHE&issuer=myserver
 ...
 ```
 
+## Generating a QR code for an entry
+
+`--gen-qr` renders a scannable QR code for an existing entry's provisioning URI
+(so you can add an account you already have stored to a phone authenticator). By
+default it prints compact terminal art:
+
+```
+$ ./acc --gen-qr myserver
+URI: otpauth://totp/myserver:phil?secret=VZNZS2YL75EWJSHE&issuer=myserver
+
+███ ▄▄▄▄▄ █ ▄▀█ ... ███
+...
+```
+
+For reliable scanning, write a PNG and open it in Preview:
+
+```
+$ ./acc --gen-qr myserver --qr-file myserver.png --qr-view
+URI: otpauth://totp/myserver:phil?secret=VZNZS2YL75EWJSHE&issuer=myserver
+QR code written to: myserver.png
+```
+
+`--qr-view` opens the file with `open` (Preview on macOS; `xdg-open` on Linux).
+The name accepts the same unique-substring match as the other commands.
+
 ## Environment variables
 
 | Variable | Description |
@@ -154,6 +179,9 @@ URI: otpauth://totp/myserver:phil?secret=VZNZS2YL75EWJSHE&issuer=myserver
 | `--password <pw>` | Password stored with an entry (used by `--sudo-pipe`). |
 | `--enroll <user>` | Generate a secret, store the entry, print the provisioning URI. Requires `--issuer`. |
 | `--qr <png>` | With `--enroll`: also write a QR code image of the URI. |
+| `--gen-qr <name>` | Generate a scannable QR code for an entry's provisioning URI (terminal art by default). |
+| `--qr-file <png>` | With `--gen-qr`: write the QR as a PNG file instead of printing terminal art. |
+| `--qr-view` | With `--gen-qr --qr-file`: open the PNG with the system viewer (Preview on macOS). |
 | `--delete <name>` | Delete an entry by name (e.g. `/example.com:bob@example.com`). |
 | `--list` | List all entry names in the config file. |
 | `--get2fa <name>` | Generate the current TOTP code for an entry. |
