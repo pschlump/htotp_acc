@@ -1,4 +1,4 @@
-# acc - Command Line TOTP Authenticator
+# ac - Command Line TOTP Authenticator
 
 `acc` is a two-factor authenticator for the command line. It performs the same
 function as Google Authenticator (RFC 6238 TOTP, SHA1, 6 digits, 30 second
@@ -117,7 +117,8 @@ only in the config file (use `--encrypted`/`$ACC_ENCRYPT_PW` to protect it).
 Add `--min-ttl 10` to guarantee the code has at least 10 seconds of life left
 before it is used.
 
-See `note/exsms-2FA-setup.md` for the full setup notes.
+See `docs/exsms-2FA-setup.md` for the full setup notes of an example system
+using 2FA with sudo, passwords, 2fA and this tool.
 
 ## Enrolling a new server / user
 

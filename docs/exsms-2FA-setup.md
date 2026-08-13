@@ -1,0 +1,80 @@
+# exsms 2FA / sudo Setup Notes
+
+Notes on giving an AI agent (Kimi Code CLI) access to a Linux server with
+password-protected sudo and TOTP 2FA via `pam_google_authenticator`.
+
+## Scenario
+
+- Linux server with a user account `phil`.
+- Passwordless (key-based) SSH login to `phil`.
+- sudo to root currently requires no password.
+- Plan: require a password for sudo, plus a TOTP 2FA code via the Google
+  Authenticator PAM module (`pam_google_authenticator`).
+- The `acc` tool in this repo (`acc.go`) stores TOTP secrets in
+  `acc.cfg.json` and can emit the current code (`--get2fa` / `--gen2fa`).
+
+## Can the agent use this?
+
+Yes to all three parts:
+
+1. **SSH** — key-based login is ideal; the agent runs `ssh phil@host ...`
+   through a non-interactive shell, no prompt needed.
+
+2. **sudo with password** — the shell is non-interactive, but sudo reads the
+   password from stdin with `-S`:
+
+   ```bash
+   echo 'thepassword' | ssh phil@host 'sudo -S whoami'
+   ```
+
+   Each Bash call is a fresh shell, so the password must be piped in on every
+   sudo invocation (unless `timestamp_timeout` is raised in sudoers).
+
+3. **TOTP via pam_google_authenticator** — sudo's PAM conversation prompts
+   are also answered from stdin under `-S`. The tool's `--sudo-pipe` mode
+   prints the stored password and a fresh TOTP code on two lines, ready to
+   pipe into `sudo -S`:
+
+   ```bash
+   ./acc --sudo-pipe myserver --min-ttl 10 | ssh phil@myserver 'sudo -S id'
+   ```
+
+   The password comes from the config entry (`--create-update ... --password`),
+   so it never appears in the command line. `--min-ttl 10` guarantees the code
+   has at least 10 seconds left before sudo sees it.
+
+## Caveats
+
+- **Clock skew** — the machine running `acc` and the server must have synced
+  clocks. The module's window setting gives some slack.
+- **Timing / reuse** — codes roll every 30s. With default `disallow-reuse`
+  behavior, a failed attempt burns the code; wait for the next window.
+- **PAM/sudoers config** —
+  - `Defaults requiretty` in sudoers blocks the stdin trick entirely;
+    make sure it is off.
+  - Odd module stacking (e.g. `nullok` placement) can change prompting
+    behavior.
+
+## Security note
+
+With `--sudo-pipe` the sudo password lives only in the config file, not in
+session context, command lines, or transcripts. Protect the config by setting
+`ACC_ENCRYPT_PW` (e.g. in `~/.zshrc`) — entries are then stored as an
+AES-256-GCM encrypted blob. The config file path can be defaulted with
+`ACC_CFG`.
+
+Safer still: a restricted sudoers entry limited to the specific commands
+needed, `NOPASSWD` for those commands only, or a dedicated service account
+instead of full root sudo.
+
+## Server-side setup checklist (TODO)
+
+- [ ] Set a password for `phil` (or the sudo target user).
+- [ ] Install `libpam-google-authenticator`.
+- [ ] Enroll: `./acc --enroll phil --issuer myserver --qr phil.png` — put the
+      printed secret in `~phil/.google_authenticator` on the server (or scan
+      the QR with the server-side setup flow). Set `ACC_CFG`/`ACC_ENCRYPT_PW`.
+- [ ] Add `auth required pam_google_authenticator.so` to `/etc/pam.d/sudo`.
+- [ ] Ensure `requiretty` is not set in sudoers.
+- [ ] Check clock skew: `./acc --check-time myserver`.
+- [ ] Test: `./acc --sudo-pipe myserver --min-ttl 10 | ssh phil@myserver 'sudo -S id'`.

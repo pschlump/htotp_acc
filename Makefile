@@ -5,7 +5,7 @@ all:
 	mkdir -p tmp
 	git rev-list -1 HEAD >tmp/,ver
 	echo "Tag: " >>tmp/,ver
-	git tag | tail -1 >>tmp/,ver
+	git tag --sort=v:refname | tail -1 >>tmp/,ver
 	echo "Build Date: " >>tmp/,ver
 	date >>tmp/,ver
 	go run gen/main.go > version.go
