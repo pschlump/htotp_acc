@@ -106,3 +106,65 @@ func TestDecrypt_TooShort(t *testing.T) {
 		t.Fatal("DecryptString should fail on ciphertext shorter than the nonce")
 	}
 }
+
+func TestEncrypt_V2Format(t *testing.T) {
+	enc, err := EncryptString([]byte("payload"), "pw")
+	if err != nil {
+		t.Fatalf("EncryptString failed: %s", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		t.Fatalf("output not valid base64: %s", err)
+	}
+	if len(raw) < len(encMagic)+saltLen+12 {
+		t.Fatalf("v2 blob too short: %d bytes", len(raw))
+	}
+	if got := string(raw[:len(encMagic)]); got != encMagic {
+		t.Fatalf("missing v2 magic prefix: got %q, want %q", got, encMagic)
+	}
+}
+
+func TestEncrypt_SaltIsRandom(t *testing.T) {
+	// A per-file salt means the same plaintext encrypts to different output
+	// (this already held for the nonce; the salt is an independent source of
+	// variation that also makes each derived key unique).
+	a, _ := EncryptString([]byte("same"), "pw")
+	b, _ := EncryptString([]byte("same"), "pw")
+	if a == b {
+		t.Fatal("two encryptions produced identical output (salt reuse)")
+	}
+}
+
+func TestDecrypt_LegacyBlob(t *testing.T) {
+	// A config file written by an older version (no magic prefix, SHA-256 key)
+	// must still decrypt, then re-encrypt as v2.
+	legacy, err := encryptLegacy([]byte("old config body"), "pw")
+	if err != nil {
+		t.Fatalf("encryptLegacy failed: %s", err)
+	}
+	raw, _ := base64.StdEncoding.DecodeString(legacy)
+	if len(raw) >= len(encMagic) && string(raw[:len(encMagic)]) == encMagic {
+		t.Fatal("legacy blob unexpectedly carries the v2 magic")
+	}
+
+	dec, err := DecryptString(legacy, "pw")
+	if err != nil {
+		t.Fatalf("legacy blob did not decrypt via DecryptString: %s", err)
+	}
+	if string(dec) != "old config body" {
+		t.Fatalf("legacy round trip mismatch: got %q", dec)
+	}
+	if _, err := DecryptString(legacy, "wrong"); err == nil {
+		t.Fatal("legacy decrypt with wrong key should fail (GCM auth)")
+	}
+
+	// Re-encrypting upgrades to v2, which must round-trip under the new key.
+	enc, err := EncryptString(dec, "pw")
+	if err != nil {
+		t.Fatalf("re-encrypt failed: %s", err)
+	}
+	reRaw, _ := base64.StdEncoding.DecodeString(enc)
+	if string(reRaw[:len(encMagic)]) != encMagic {
+		t.Fatal("re-encrypted blob is not v2")
+	}
+}

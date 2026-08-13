@@ -60,8 +60,13 @@ Yes to all three parts:
 With `--sudo-pipe` the sudo password lives only in the config file, not in
 session context, command lines, or transcripts. Protect the config by setting
 `ACC_ENCRYPT_PW` (e.g. in `~/.zshrc`) — entries are then stored as an
-AES-256-GCM encrypted blob. The config file path can be defaulted with
-`ACC_CFG`.
+Argon2id-derived key (per-file salt) + AES-256-GCM encrypted blob, so an
+offline brute force of a stolen config is expensive rather than trivial. The
+config file path can be defaulted with `ACC_CFG`.
+
+Config files written by older versions of `acc` (a single-pass SHA-256 key,
+no salt) are still decrypted on read and re-encrypted in the stronger format
+on the next write, so upgrading requires no manual migration.
 
 Safer still: a restricted sudoers entry limited to the specific commands
 needed, `NOPASSWD` for those commands only, or a dedicated service account
