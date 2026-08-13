@@ -1,7 +1,8 @@
 
-.PHONY: all linux test run_all gen_2fa_otk validate_otk get_list_sites import_qr_code register_001 install deploy
+.PHONY: all gen_version linux wsl test run_all gen_2fa_otk validate_otk get_list_sites import_qr_code register_001 install deploy
 
-all:
+# gen_version regenerates version.go from the current git commit/tag/date.
+gen_version:
 	mkdir -p tmp
 	git rev-list -1 HEAD >tmp/,ver
 	echo "Tag: " >>tmp/,ver
@@ -9,10 +10,17 @@ all:
 	echo "Build Date: " >>tmp/,ver
 	date >>tmp/,ver
 	go run gen/main.go > version.go
+
+all: gen_version
 	go build
 
-linux:
+# linux/amd64 ELF (also runs under x86_64 WSL).
+linux: gen_version
 	GOOS=linux GOARCH=amd64 go build -o acc_linux
+
+# Cross-compile for Jake's (jakce) x86_64 WSL development environment.
+wsl: gen_version
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o acc_wsl
 
 test:
 	go vet ./...
