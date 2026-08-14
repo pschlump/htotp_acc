@@ -1,0 +1,11 @@
+
+1.	Once pushed, htotp_acc can pick it up with go get
+	github.com/pschlump/htotp@v1.1.0. Two things to keep in mind for
+	that update: GenerateQRCodeFromURI now returns an error (acc.go:536
+	calls it as a statement, so it compiles as-is — you may want to
+	handle the error), and GenerateTOTPAndSecondsLeft now genuinely
+	returns seconds-remaining if acc uses it anywhere.
+
+2. dbgo - new veriosn
+	ReadConfig - new version
+
