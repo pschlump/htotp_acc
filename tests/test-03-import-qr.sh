@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# test-03-import-qr.sh - QR code analysis with UWCedar.png (a defunct site;
+# test-03-import-qr.sh - QR code analysis with example-QR.png (a defunct site;
 # safe test data).  Imports the QR, then cross-checks the stored entry
 # against the URI that `qr-decode` reads out of the same image, and
 # round-trips a generated code through --verify.
@@ -10,7 +10,7 @@ set -u
 WORK_DIR="$TEST_TMP/03-import-qr"
 mkdir -p "$WORK_DIR"
 CFG="$WORK_DIR/acc.cfg.json"
-QR="$REPO_DIR/UWCedar.png"
+QR="$REPO_DIR/tests/example-QR.png"
 
 ENTRY="uwcedar.io:pschlump@uwyo.edu"
 SECRET_UPPER="UN6C5CZBZ6TQ7BRVPCD2STWDTJ5RTQXF"
