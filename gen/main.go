@@ -2,12 +2,11 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 )
 
 func main() {
-	data, err := ioutil.ReadFile("./tmp/,ver")
+	data, err := os.ReadFile("./tmp/,ver")
 	if err != nil {
 		// xyzzy
 		os.Exit(1)

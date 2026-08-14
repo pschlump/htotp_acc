@@ -1,15 +1,11 @@
 package main
 
-// PJSenc xyzzy
-// xyzzy - TODO xyzzy800 - fix error
-
 import (
 	"encoding/json"
 	"flag"
 	"fmt"
 	_ "image/jpeg"
 	_ "image/png"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -27,8 +23,6 @@ import (
 	"github.com/pschlump/htotp"
 )
 
-// xyzzy4040 - need to pull back file from server.
-
 var Cfg = flag.String("cfg", envOr("ACC_CFG", "acc.cfg.json"), "config file for this program - this is where your secret is saved. Defaults to $ACC_CFG if set.")
 var DbFlag = flag.String("db_flag", "", "Additional Debug Flags")
 
@@ -44,7 +38,7 @@ var GetSecret = flag.String("get-secret", "", "Retreive the secret for a user")
 var CreateNewSecret = flag.Bool("create-new-secret", false, "Create a new TOTP secrent - random value")
 var Issuer = flag.String("issuer", "", "Issuser/Realm to use with a --create-upate [UserName].")
 var Delete = flag.String("delete", "", "Delete an entry in the acc.cfg.json file by name.")
-var Verify = flag.String("verify", "", "Verify an existing TOTP code.")
+var Verify = flag.String("verify", "", "Verify a TOTP code: --verify <name>:<code> (or --get2fa <name> --verify <code>). Exits 0 if verified, 1 if not.")
 var Output = flag.String("output", "", "Output file to write TOTP value to.")
 var LogFilePath = flag.String("log-file-path", "", "Use the path to access a log file that will have the URL for getting the QR in it.")
 var LogFilePattern = flag.String("log-file-pattern", "", "Use the pattern to fine a URL in the log file for accessing the QR Code Image.")
@@ -95,14 +89,12 @@ type GlobalConfigData struct {
 
 var gCfg GlobalConfigData
 var db_flag map[string]bool
-var logFilePtr *os.File
 
 // encPassword is the resolved config-encryption password: --encrypted flag,
 // or $ACC_ENCRYPT_PW if the flag is not given.
 var encPassword string
 
 func init() {
-	logFilePtr = os.Stderr
 	db_flag = make(map[string]bool)
 }
 
@@ -194,13 +186,13 @@ Notes:
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data: %s\n", err)
 				os.Exit(1)
 			}
-			err = ioutil.WriteFile(*Cfg, []byte(fmt.Sprintf(`{"ac_config_item":[],"encrypted_data":%q,"encrypted":"y"}`, encData)), 0600)
+			err = os.WriteFile(*Cfg, []byte(fmt.Sprintf(`{"ac_config_item":[],"encrypted_data":%q,"encrypted":"y"}`, encData)), 0600)
 			if err != nil {
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data file: %s Error:%s\n", *Cfg, err)
 				os.Exit(1)
 			}
 		} else {
-			err := ioutil.WriteFile(*Cfg, []byte(`{"ac_config_item":[]}`), 0600)
+			err := os.WriteFile(*Cfg, []byte(`{"ac_config_item":[]}`), 0600)
 			if err != nil {
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data file: %s Error:%s\n", *Cfg, err)
 				os.Exit(1)
@@ -231,7 +223,7 @@ Notes:
 			fmt.Fprintf(os.Stderr, "Unable to decrypt configuration: %s (wrong password?)\n", err)
 			os.Exit(1)
 		}
-		if err := json.Unmarshal(dec, &gCfg.ACConfig.Local); err != nil {
+		if err := json.Unmarshal(dec, &gCfg.Local); err != nil {
 			fmt.Fprintf(os.Stderr, "Unable to parse decrypted configuration: %s\n", err)
 			os.Exit(1)
 		}
@@ -285,9 +277,7 @@ Notes:
 			os.Exit(1)
 		}
 		s := ReadLogFile(*LogFilePath, *LogFilePattern)
-		if strings.HasPrefix(s, "http") {
-			// xyzzy4040 - need to pull back file from server.
-		}
+		// xyzzy4040 - if s starts with "http" need to pull back file from server.
 		Import = &s
 	}
 
@@ -322,19 +312,22 @@ Notes:
 		} else {
 			newCfg.Username = strings.TrimPrefix(uu.Path, "/")
 		}
-		newCfg.Secret = qq.Get("secret")
+		// Normalize to uppercase: RFC 3548 base32 is case-insensitive in the
+		// wild (Google Authenticator URIs often use lowercase), but the htotp
+		// decoder only accepts uppercase.
+		newCfg.Secret = strings.ToUpper(qq.Get("secret"))
 
-		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
+		if pos := InConfig(gCfg.Local, newCfg.Name); pos == -1 {
 			if db8 {
 				fmt.Printf("Did not find\n")
 			}
-			gCfg.ACConfig.Local = append(gCfg.ACConfig.Local, newCfg)
+			gCfg.Local = append(gCfg.Local, newCfg)
 			WriteConfig(gCfg)
 		} else {
 			if db8 {
 				fmt.Printf("Found at location %d\n", pos)
 			}
-			gCfg.ACConfig.Local[pos] = newCfg
+			gCfg.Local[pos] = newCfg
 			WriteConfig(gCfg)
 		}
 		if *IsScript {
@@ -368,19 +361,20 @@ Notes:
 			Name:     fmt.Sprintf("/%s:%s", *Issuer, *CreateUpdate),
 			Username: *CreateUpdate,
 			Password: *Password,
-			Secret:   *Secret,
-			Realm:    *Issuer,
-			Digits:   0,
+			// Normalize to uppercase - see the --import note above.
+			Secret: strings.ToUpper(*Secret),
+			Realm:  *Issuer,
+			Digits: 0,
 		}
 		if db8 {
 			fmt.Printf("Config is: %s\n", dbgo.SVarI(newCfg))
 		}
 
-		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
+		if pos := InConfig(gCfg.Local, newCfg.Name); pos == -1 {
 			if db8 {
 				fmt.Printf("Did not find\n")
 			}
-			gCfg.ACConfig.Local = append(gCfg.ACConfig.Local, newCfg)
+			gCfg.Local = append(gCfg.Local, newCfg)
 			WriteConfig(gCfg)
 			if *IsScript {
 				fmt.Printf("%s\n", newCfg.Name)
@@ -391,7 +385,7 @@ Notes:
 			if db8 {
 				fmt.Printf("Found at location %d\n", pos)
 			}
-			gCfg.ACConfig.Local[pos] = newCfg
+			gCfg.Local[pos] = newCfg
 			WriteConfig(gCfg)
 			if *IsScript {
 				fmt.Printf("%s\n", newCfg.Name)
@@ -409,15 +403,15 @@ Notes:
 			fmt.Printf("Config To Delete Is: %s\n", dbgo.SVarI(newCfg))
 		}
 
-		if pos, err := ResolveName(gCfg.ACConfig.Local, newCfg.Name); err != nil {
+		if pos, err := ResolveName(gCfg.Local, newCfg.Name); err != nil {
 			fmt.Printf("Did not find ->%s<- in file\n", newCfg.Name)
 		} else {
 			if db8 {
 				fmt.Printf("Found at location %d\n", pos)
 			}
 
-			newCfg.Name = gCfg.ACConfig.Local[pos].Name
-			gCfg.ACConfig.Local = goTemplateTools.RemoveFromSlice(gCfg.ACConfig.Local, pos)
+			newCfg.Name = gCfg.Local[pos].Name
+			gCfg.Local = goTemplateTools.RemoveFromSlice(gCfg.Local, pos)
 
 			WriteConfig(gCfg)
 			if *IsScript {
@@ -442,25 +436,23 @@ Notes:
 		var tl uint
 
 		// Search for and get item
-		if pos, err := ResolveName(gCfg.ACConfig.Local, *Get2fa); err == nil {
+		if pos, err := ResolveName(gCfg.Local, *Get2fa); err == nil {
 			if db8 {
-				fmt.Printf("%s\n", gCfg.ACConfig.Local[pos].Password)
+				fmt.Printf("%s\n", gCfg.Local[pos].Password)
 			}
 
-			secret := gCfg.ACConfig.Local[pos].Secret
-			un := gCfg.ACConfig.Local[pos].Username
+			secret := gCfg.Local[pos].Secret
+			un := gCfg.Local[pos].Username
 			var pin string
 			if *Verify != "" {
-				pin = *Verify
-				if htotp.CheckRfc6238TOTPKey(un, pin, secret) {
-					fmt.Printf("%sVerified: %s with user %s%s\n", dbgo.ColorGreen, pin, un, dbgo.ColorReset)
-				} else {
-					fmt.Printf("%sFailed To Verifiy: %s with user %s%s\n", dbgo.ColorRed, pin, un, dbgo.ColorReset)
-				}
+				VerifyPin(gCfg.Local, *Get2fa, *Verify)
 			} else {
 				pin, tl = genWithMinTTL(un, secret, uint(*MinTTL)) // generate TOTP key
 				if *Output != "" {
-					ioutil.WriteFile(*Output, []byte(fmt.Sprintf("%s\n", pin)), 0644)
+					if err := os.WriteFile(*Output, []byte(fmt.Sprintf("%s\n", pin)), 0644); err != nil {
+						fmt.Fprintf(os.Stderr, "Unable to write output to %s: %s\n", *Output, err)
+						os.Exit(1)
+					}
 				} else {
 					if *IsScript {
 						if *ShowTTL {
@@ -508,8 +500,8 @@ Notes:
 	} else if *SudoPipe != "" {
 
 		// Print "<password>\n<totp>\n" for piping into 'sudo -S'.
-		if pos, err := ResolveName(gCfg.ACConfig.Local, *SudoPipe); err == nil {
-			entry := gCfg.ACConfig.Local[pos]
+		if pos, err := ResolveName(gCfg.Local, *SudoPipe); err == nil {
+			entry := gCfg.Local[pos]
 			pin, _ := genWithMinTTL(entry.Username, entry.Secret, uint(*MinTTL))
 			fmt.Printf("%s\n%s\n", entry.Password, pin)
 		} else {
@@ -532,10 +524,10 @@ Notes:
 			Realm:    *Issuer,
 			Digits:   0,
 		}
-		if pos := InConfig(gCfg.ACConfig.Local, newCfg.Name); pos == -1 {
-			gCfg.ACConfig.Local = append(gCfg.ACConfig.Local, newCfg)
+		if pos := InConfig(gCfg.Local, newCfg.Name); pos == -1 {
+			gCfg.Local = append(gCfg.Local, newCfg)
 		} else {
-			gCfg.ACConfig.Local[pos] = newCfg
+			gCfg.Local[pos] = newCfg
 		}
 		WriteConfig(gCfg)
 
@@ -577,9 +569,9 @@ Notes:
 	} else if *GetSecret != "" {
 
 		// Search for and get item
-		if pos, err := ResolveName(gCfg.ACConfig.Local, *GetSecret); err == nil {
+		if pos, err := ResolveName(gCfg.Local, *GetSecret); err == nil {
 
-			secret := gCfg.ACConfig.Local[pos].Secret
+			secret := gCfg.Local[pos].Secret
 			fmt.Printf("%s\n", secret)
 
 		} else {
@@ -597,8 +589,8 @@ Notes:
 		// Generate a scannable QR code for an existing entry's provisioning
 		// URI.  By default the QR is printed as terminal art; --qr-file writes
 		// a PNG (which scans far more reliably) and --qr-view opens it.
-		if pos, err := ResolveName(gCfg.ACConfig.Local, *GenQR); err == nil {
-			entry := gCfg.ACConfig.Local[pos]
+		if pos, err := ResolveName(gCfg.Local, *GenQR); err == nil {
+			entry := gCfg.Local[pos]
 
 			// Reconstruct the otpauth:// URI from the stored entry, matching
 			// the format produced by --enroll / --create-update.
@@ -650,11 +642,40 @@ Notes:
 			os.Exit(1)
 		}
 
+	} else if *Verify != "" {
+
+		// Standalone verification: --verify <name>:<code>.  Entry names can
+		// themselves contain a colon ("/issuer:user"), so split on the last one.
+		i := strings.LastIndex(*Verify, ":")
+		if i == -1 {
+			fmt.Fprintf(os.Stderr, "Usage: --verify <name>:<code>   (or --get2fa <name> --verify <code>)\n")
+			os.Exit(1)
+		}
+		VerifyPin(gCfg.Local, (*Verify)[:i], (*Verify)[i+1:])
+
 	} else {
 
-		fmt.Fprintf(os.Stderr, "Invalid options - probably not implemented yet.\n")
+		fmt.Fprintf(os.Stderr, "Invalid or missing options.\n\n")
+		flag.Usage()
 
 	}
+}
+
+// VerifyPin checks a TOTP code for the named entry, prints the result, and
+// exits: 0 if the code verified, 1 if it did not (or the entry was not found).
+func VerifyPin(cc []ACConfigItem, name, pin string) {
+	pos, err := ResolveName(cc, name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
+	}
+	un := cc[pos].Username
+	if htotp.CheckRfc6238TOTPKey(un, pin, cc[pos].Secret) {
+		fmt.Printf("%sVerified: %s with user %s%s\n", dbgo.ColorGreen, pin, un, dbgo.ColorReset)
+		os.Exit(0)
+	}
+	fmt.Printf("%sFailed To Verify: %s with user %s%s\n", dbgo.ColorRed, pin, un, dbgo.ColorReset)
+	os.Exit(1)
 }
 
 func Usage(fatal bool) {
@@ -716,7 +737,7 @@ func WriteConfig(gCfg GlobalConfigData) {
 		fmt.Fprintf(os.Stderr, "Raw ->%s<- to file %s\n", dbgo.SVarI(gCfg), fn)
 	}
 	//	gCfg.WrittenAtTimstamp = xxxxx
-	err := ioutil.WriteFile(fn, []byte(dbgo.SVarI(gCfg)), 0600)
+	err := os.WriteFile(fn, []byte(dbgo.SVarI(gCfg)), 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error on write file: %s error: %s\n", fn, err)
 		fmt.Fprintf(os.Stderr, "Failed to import!\n")

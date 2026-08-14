@@ -25,6 +25,12 @@ wsl: gen_version
 test:
 	go vet ./...
 	go test ./...
+	$(MAKE) bash-tests
+
+## bash-tests: run the bash test suite in ./tests (builds acc into a temp dir;
+## uses UWCedar.png - a defunct site - as QR test data)
+bash-tests:
+	bash tests/run-tests.sh
 
 # This is kind of a full run of what the CLI Authenticator can do.
 run_all: import_qr_code gen_2fa_otk validate_otk get_list_sites
@@ -48,22 +54,15 @@ install:
 	( cd ~/bin ; rm -f acc )
 	( cd ~/bin ; ln -s ../go/src/github.com/pschlump/htotp_acc/acc . )
 
-
-#InitialSetup:
-#	echo "# htotp_acc" >> README.md
-#	git init
-#	git add README.md
-#	git commit -m "first commit"
-#	git branch -M main
-#	git remote add origin https://github.com/pschlump/htotp_acc.git
-#	git push -u origin main
-
+## lint: run golangci-lint
+lint:
+	golangci-lint run ./...
 
 ## git bump tag
 git_set_tag:
 	git commit -a -m "Before Version Bump"
 	git push
-	git tag v1.0.14
+	git tag v1.0.15
 	git push origin --tags
 	$(MAKE) all
 	git add -A .

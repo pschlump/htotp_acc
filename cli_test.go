@@ -22,7 +22,11 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "failed to create temp dir: %s\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(dir)
+	defer func() {
+		if err := os.RemoveAll(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to remove temp dir %s: %s\n", dir, err)
+		}
+	}()
 
 	accBin = filepath.Join(dir, "acc_test_bin")
 	build := exec.Command("go", "build", "-o", accBin, ".")
@@ -256,9 +260,38 @@ func TestCLI_Verify(t *testing.T) {
 	} else {
 		wrong = "0" + pin[1:]
 	}
-	stdout, _, _ = runAcc(t, "--cfg", cfg, "--get2fa", testName, "--is_script", "--verify", wrong)
-	if !strings.Contains(stdout, "Failed To Verifiy") {
+	stdout, _, code = runAcc(t, "--cfg", cfg, "--get2fa", testName, "--is_script", "--verify", wrong)
+	if code != 1 {
+		t.Errorf("verify failure exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stdout, "Failed To Verify") {
 		t.Errorf("expected verification failure for %q, got: %q", wrong, stdout)
+	}
+}
+
+func TestCLI_VerifyStandalone(t *testing.T) {
+	cfg := createTestEntry(t)
+
+	stdout, _, _ := runAcc(t, "--cfg", cfg, "--get2fa", testName, "--is_script")
+	pin := strings.TrimSpace(stdout)
+
+	stdout, _, code := runAcc(t, "--cfg", cfg, "--verify", testName+":"+pin)
+	if code != 0 {
+		t.Fatalf("standalone verify exit code = %d", code)
+	}
+	if !strings.Contains(stdout, "Verified: "+pin) {
+		t.Errorf("expected verification of %q, got: %q", pin, stdout)
+	}
+
+	var wrong string
+	if pin[0] == '0' {
+		wrong = "1" + pin[1:]
+	} else {
+		wrong = "0" + pin[1:]
+	}
+	_, _, code = runAcc(t, "--cfg", cfg, "--verify", testName+":"+wrong)
+	if code != 1 {
+		t.Errorf("standalone verify failure exit code = %d, want 1", code)
 	}
 }
 
