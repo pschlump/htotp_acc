@@ -138,11 +138,6 @@ Notes:
 
 	Config file defaults to $ACC_CFG (or ./acc.cfg.json).
 	Encryption password defaults to $ACC_ENCRYPT_PW (or --encrypted).
-
-	Path to Code:
-		.../go/src/github.com/pschlump/htotp_acc
-	Build Date:
-		Mon Sep 19 07:24:19 MDT 2022
 `)
 	}
 
