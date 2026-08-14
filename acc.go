@@ -533,7 +533,10 @@ Notes:
 		fmt.Printf("\nOn the server, run 'google-authenticator' and enter this secret, or put this line\n")
 		fmt.Printf("in ~%s/.google_authenticator:\n\n\t%s\n", *Enroll, secret)
 		if *QR != "" {
-			htotp.GenerateQRCodeFromURI(uri, *QR)
+			if err := htotp.GenerateQRCodeFromURI(uri, *QR); err != nil {
+				fmt.Fprintf(os.Stderr, "Unable to write QR code to %s: %s\n", *QR, err)
+				os.Exit(1)
+			}
 			fmt.Printf("\nQR code written to: %s\n", *QR)
 		}
 
