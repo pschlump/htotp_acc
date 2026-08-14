@@ -4,8 +4,8 @@ go 1.26.5
 
 require (
 	github.com/atotto/clipboard v0.1.4
-	github.com/pschlump/ReadConfig v1.0.11
-	github.com/pschlump/dbgo v1.0.8
+	github.com/pschlump/ReadConfig v1.0.13
+	github.com/pschlump/dbgo v1.0.10
 	github.com/pschlump/filelib v1.0.12
 	github.com/pschlump/goTemplateTools v1.0.0
 	github.com/pschlump/goqrcode v1.1.0
@@ -14,12 +14,11 @@ require (
 )
 
 require (
-	github.com/fatih/structtag v1.2.0 // indirect
 	github.com/makiuchi-d/gozxing v0.1.1 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
-	github.com/pschlump/ansi v1.0.6 // indirect
-	github.com/pschlump/go-colorable v0.0.23 // indirect
-	github.com/pschlump/go-isatty v0.0.23 // indirect
+	github.com/pschlump/ansi v1.0.9 // indirect
+	github.com/pschlump/go-colorable v0.0.24 // indirect
+	github.com/pschlump/go-isatty v0.0.24 // indirect
 	github.com/pschlump/json v1.12.1 // indirect
 	github.com/pschlump/json5 v1.0.0 // indirect
 	github.com/pschlump/jsonSyntaxErrorLib v1.0.8 // indirect

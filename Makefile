@@ -62,7 +62,7 @@ lint:
 git_set_tag:
 	-git commit -a -m "Before Version Bump"
 	-git push
-	git tag v1.0.16
+	git tag v1.0.17
 	git push origin --tags
 	$(MAKE) all
 	git add -A .
