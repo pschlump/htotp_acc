@@ -134,7 +134,8 @@ On your workstation:
 
 ```sh
 cd ~/go/src/github.com/pschlump/htotp_acc
-export ACC_ENCRYPT_PW='your-config-password'   # in ~/.zshrc; encrypts acc.cfg.json
+# ACC_ENCRYPT_PW comes from the shell rc, which pulls it from the OS keystore
+# (macOS Keychain / Windows Credential Manager) — see exsms-2FA-setup.md.
 ./acc --enroll phil --issuer myserver --qr /tmp/phil-myserver.png
 ```
 
@@ -149,6 +150,9 @@ URI:    otpauth://totp/myserver:phil?secret=VZNZS2YL75EWJSHE&issuer=myserver
 Also store the sudo password with the entry now (used by `--sudo-pipe`):
 
 ```sh
+# --password is used once at enrollment (visible to ps/history briefly; prefix
+# with a space if HIST_IGNORE_SPACE is set). Afterwards --sudo-pipe reads it
+# from the encrypted config — it never appears on a command line again.
 ./acc --create-update phil --issuer myserver \
       --secret VZNZS2YL75EWJSHE --password 'phil-sudo-password'
 ```

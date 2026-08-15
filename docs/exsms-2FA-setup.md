@@ -59,7 +59,9 @@ Yes to all three parts:
 
 With `--sudo-pipe` the sudo password lives only in the config file, not in
 session context, command lines, or transcripts. Protect the config by setting
-`ACC_ENCRYPT_PW` (e.g. in `~/.zshrc`) — entries are then stored as an
+`ACC_ENCRYPT_PW` — stored in the **OS keystore** (macOS Keychain / Windows
+Credential Manager on WSL) and pulled into the environment by the shell rc,
+not hardcoded in `~/.zshrc` (see below). Entries are then stored as an
 Argon2id-derived key (per-file salt) + AES-256-GCM encrypted blob, so an
 offline brute force of a stolen config is expensive rather than trivial. The
 config file path can be defaulted with `ACC_CFG`.
@@ -72,13 +74,63 @@ Safer still: a restricted sudoers entry limited to the specific commands
 needed, `NOPASSWD` for those commands only, or a dedicated service account
 instead of full root sudo.
 
+## Storing `ACC_ENCRYPT_PW` in the OS keystore
+
+The encryption password is the one secret that used to sit in a dotfile. Keep
+it in the OS credential store instead and have the shell rc pull it out;
+`acc` itself is unchanged (it reads `$ACC_ENCRYPT_PW` or `--encrypted` as
+before). Full runbook with caveats: the "Storing `ACC_ENCRYPT_PW` in the OS
+keystore" section of `2FA-SUDO-SETUP.md` in the exsms repo docs.
+
+### macOS — Keychain (`security` CLI)
+
+```sh
+# one-time, in a real Terminal (login keychain unlocked; -U = update if exists)
+security add-generic-password -a "$USER" -s acc-encrypt-pw -w '<password>' -U
+
+# in ~/.zshrc, replacing any hardcoded export:
+export ACC_ENCRYPT_PW="$(security find-generic-password -a "$USER" -s acc-encrypt-pw -w 2>/dev/null)"
+
+# verify in a NEW terminal tab, without printing the secret:
+[ -n "$ACC_ENCRYPT_PW" ] && echo set
+```
+
+Caveats: reads from cron/agent sandboxes fail with "User interaction is not
+allowed" (no GUI session); click **Always Allow** if the first read prompts.
+
+### WSL — Windows Credential Manager (`powershell.exe` + PasswordVault)
+
+```bash
+# one-time, from the WSL shell
+powershell.exe -NoProfile -Command '
+  $v = New-Object Windows.Security.Credentials.PasswordVault
+  $c = New-Object Windows.Security.Credentials.PasswordCredential("htotp_acc","acc-encrypt-pw","<password>")
+  $v.Add($c)'
+
+# in ~/.bashrc (tr -d is mandatory: Windows exe output ends in CRLF):
+export ACC_ENCRYPT_PW="$(powershell.exe -NoProfile -Command \
+  '(New-Object Windows.Security.Credentials.PasswordVault).Retrieve("htotp_acc","acc-encrypt-pw").Password' 2>/dev/null \
+  | tr -d '\r\n')"
+```
+
+### Both platforms
+
+- **Rotation does not re-encrypt:** updating the stored password does not
+  change the password an existing `acc.cfg.json` was encrypted with — losing
+  the stored value means losing the config. Keep a sealed backup of the old
+  export until the new flow is verified.
+- The only remaining command-line exposure is `--password` at enrollment
+  (visible to `ps`/shell history briefly); prefix the command with a space
+  (with `HIST_IGNORE_SPACE` set) if that matters.
+
 ## Server-side setup checklist (TODO)
 
 - [ ] Set a password for `phil` (or the sudo target user).
 - [ ] Install `libpam-google-authenticator`.
 - [ ] Enroll: `./acc --enroll phil --issuer myserver --qr phil.png` — put the
       printed secret in `~phil/.google_authenticator` on the server (or scan
-      the QR with the server-side setup flow). Set `ACC_CFG`/`ACC_ENCRYPT_PW`.
+      the QR with the server-side setup flow). Set `ACC_CFG`; store
+      `ACC_ENCRYPT_PW` in the OS keystore (see above).
 - [ ] Add `auth required pam_google_authenticator.so` to `/etc/pam.d/sudo`.
 - [ ] Ensure `requiretty` is not set in sudoers.
 - [ ] Check clock skew: `./acc --check-time myserver`.
