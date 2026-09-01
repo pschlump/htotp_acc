@@ -1,6 +1,6 @@
 module github.com/pschlump/acc
 
-go 1.26.5
+go 1.27.0
 
 require (
 	github.com/atotto/clipboard v0.1.4

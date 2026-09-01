@@ -163,7 +163,7 @@ Notes:
 	}
 
 	if *Version {
-		fmt.Printf("Version: %s\n", GitCommit)
+		fmt.Printf("Version: %s\nTag: \n%s\nBuild Date: \n%s\n", GitCommit, GitTag, BuildDate)
 		os.Exit(0)
 	}
 

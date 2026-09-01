@@ -1,26 +1,22 @@
 
-.PHONY: all gen_version linux wsl test run_all gen_2fa_otk validate_otk get_list_sites import_qr_code register_001 install deploy
+.PHONY: all linux wsl test run_all gen_2fa_otk validate_otk get_list_sites import_qr_code register_001 install deploy
 
-# gen_version regenerates version.go from the current git commit/tag/date.
-gen_version:
-	mkdir -p tmp
-	git rev-list -1 HEAD >tmp/,ver
-	echo "Tag: " >>tmp/,ver
-	git tag --sort=v:refname | tail -1 >>tmp/,ver
-	echo "Build Date: " >>tmp/,ver
-	date >>tmp/,ver
-	go run gen/main.go > version.go
+# Build information (git commit, tag, build date) is injected at link time via
+# -ldflags; version.go is static and never regenerated.
+LDFLAGS := -X 'main.GitCommit=$(shell git rev-list -1 HEAD)' \
+           -X 'main.GitTag=$(shell git tag --sort=v:refname | tail -1)' \
+           -X 'main.BuildDate=$(shell date)'
 
-all: gen_version
-	go build
+all:
+	go build -ldflags "$(LDFLAGS)"
 
 # linux/amd64 ELF (also runs under x86_64 WSL).
-linux: gen_version
-	GOOS=linux GOARCH=amd64 go build -o acc_linux
+linux:
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o acc_linux
 
 # Cross-compile for Jake's (jakce) x86_64 WSL development environment.
-wsl: gen_version
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o acc_wsl
+wsl:
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o acc_wsl
 
 test:
 	go vet ./...
@@ -58,14 +54,12 @@ install:
 lint:
 	golangci-lint run ./...
 
-## git bump tag
+## git bump tag: tag HEAD with the next patch version (v1.0.N -> v1.0.N+1) and
+## push it.  The build picks the tag up via the -X flag above; version.go no
+## longer changes on a build so there is no "Version Bump" commit to make.
 git_set_tag:
 	-git commit -a -m "Before Version Bump"
 	-git push
-	git tag v1.0.18
+	git tag "$$(git tag --sort=v:refname | tail -1 | awk -F. '{print $$1"."$$2"."$$3+1}')"
 	git push origin --tags
-	$(MAKE) all
-	git add -A .
-	-git commit -m "Version Bump"
-	git push
 

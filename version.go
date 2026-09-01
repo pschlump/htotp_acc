@@ -1,10 +1,12 @@
 
 package main
 
-var GitCommit string = `981c42db9264dc01895f900b7c1dc95ad0ee592d
-Tag: 
-v1.0.18
-Build Date: 
-Fri Aug 14 15:18:11 MDT 2026
-`
+// Build information.  These are set at link time by the Makefile via
+//   go build -ldflags "-X main.GitCommit=... -X main.GitTag=... -X main.BuildDate=..."
+// A plain `go build` without those flags gets the defaults below.
 
+var (
+	GitCommit string = "not-set (build with make)"
+	GitTag    string = "not-set"
+	BuildDate string = "not-set"
+)
