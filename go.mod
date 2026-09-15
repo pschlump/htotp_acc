@@ -9,7 +9,7 @@ require (
 	github.com/pschlump/filelib v1.0.15
 	github.com/pschlump/goTemplateTools v1.0.1
 	github.com/pschlump/goqrcode v1.1.0
-	github.com/pschlump/htotp v1.1.0
+	github.com/pschlump/htotp v1.1.1
 	golang.org/x/crypto v0.55.0
 )
 

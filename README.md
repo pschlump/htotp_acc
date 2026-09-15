@@ -117,6 +117,15 @@ only in the config file (use `--encrypted`/`$ACC_ENCRYPT_PW` to protect it).
 Add `--min-ttl 10` to guarantee the code has at least 10 seconds of life left
 before it is used.
 
+Add `--no-reuse` when the server's PAM rejects a reused code
+(`pam_google_authenticator`'s default `DISALLOW_REUSE`) and you run
+back-to-back sudo commands: two invocations in the same 30-second window would
+otherwise emit the identical code and the second one fails. With `--no-reuse`,
+acc remembers the last window it emitted per entry (in a small state file —
+`--state`, `$ACC_STATE`, or `acc.state.json` next to `--cfg`) and, if the
+current window was already used, waits for the next one, emitting 2 seconds
+into it so a slightly-behind server clock never sees a code from the future.
+
 See `docs/exsms-2FA-setup.md` for the full setup notes of an example system
 using 2FA with sudo, passwords, 2fA and this tool.
 
@@ -191,6 +200,8 @@ The name accepts the same unique-substring match as the other commands.
 | `--create-new-secret` | Generate and print a new random 16-char base32 secret. |
 | `--sudo-pipe <name>` | Print `<password>\n<totp>` for piping into `sudo -S`. |
 | `--min-ttl <secs>` | Wait for the next window if fewer than this many seconds remain on the code. |
+| `--no-reuse` | Never emit the same TOTP window twice for an entry; waits for a fresh window (for replay-protected servers). |
+| `--state <file>` | State file for `--no-reuse` (default `$ACC_STATE`, else `acc.state.json` next to `--cfg`). |
 | `--show-ttl` | With `--is_script`: print `<code> <seconds-left>`. |
 | `--check-time <host>` | Compare the local clock with `<host>` via ssh (detect TOTP skew). |
 | `--is_script` | Machine-readable output only; skip clipboard and countdown. |

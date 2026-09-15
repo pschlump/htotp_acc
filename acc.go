@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	_ "image/jpeg"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -54,6 +56,8 @@ var GenQR = flag.String("gen-qr", "", "Generate a scannable QR code for the name
 var QRFile = flag.String("qr-file", "", "With --gen-qr: write the QR code as a PNG to this file (and open it if --qr-view is set).")
 var QRView = flag.Bool("qr-view", false, "With --gen-qr --qr-file: open the PNG with the system viewer (Preview on macOS).")
 var CheckTime = flag.String("check-time", "", "Compare the local clock with <host> (via ssh) to detect TOTP clock skew.")
+var NoReuse = flag.Bool("no-reuse", false, "With --get2fa/--sudo-pipe: never emit the same TOTP window twice for an entry (for replay-protected servers, e.g. pam_google_authenticator DISALLOW_REUSE); waits for a fresh window. Tracks emitted windows in the --state file.")
+var State = flag.String("state", envOr("ACC_STATE", ""), "State file for --no-reuse (last emitted TOTP window per entry). Defaults to $ACC_STATE, else acc.state.json next to --cfg.")
 
 // envOr returns the value of the named environment variable, or def if unset/empty.
 func envOr(name, def string) string {
@@ -134,10 +138,14 @@ $ acc --gen-qr myserver --qr-file myserver.png --qr-view
 $ echo "Pipe password + TOTP code into sudo over ssh"
 $ acc --sudo-pipe myserver | ssh phil@myserver 'sudo -S id'
 
+$ echo "Same, but never reuse a window (replay-protected servers)"
+$ acc --sudo-pipe myserver --no-reuse | ssh phil@myserver 'sudo -S id'
+
 Notes:
 
 	Config file defaults to $ACC_CFG (or ./acc.cfg.json).
 	Encryption password defaults to $ACC_ENCRYPT_PW (or --encrypted).
+	State file for --no-reuse defaults to $ACC_STATE (or acc.state.json next to --cfg).
 `)
 	}
 
@@ -436,13 +444,16 @@ Notes:
 				fmt.Printf("%s\n", gCfg.Local[pos].Password)
 			}
 
-			secret := gCfg.Local[pos].Secret
 			un := gCfg.Local[pos].Username
 			var pin string
 			if *Verify != "" {
 				VerifyPin(gCfg.Local, *Get2fa, *Verify)
 			} else {
-				pin, tl = genWithMinTTL(un, secret, uint(*MinTTL)) // generate TOTP key
+				pin, tl, err = genCode(gCfg.Local[pos]) // generate TOTP key
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "%s\n", err)
+					os.Exit(1)
+				}
 				if *Output != "" {
 					if err := os.WriteFile(*Output, []byte(fmt.Sprintf("%s\n", pin)), 0644); err != nil {
 						fmt.Fprintf(os.Stderr, "Unable to write output to %s: %s\n", *Output, err)
@@ -497,7 +508,11 @@ Notes:
 		// Print "<password>\n<totp>\n" for piping into 'sudo -S'.
 		if pos, err := ResolveName(gCfg.Local, *SudoPipe); err == nil {
 			entry := gCfg.Local[pos]
-			pin, _ := genWithMinTTL(entry.Username, entry.Secret, uint(*MinTTL))
+			pin, _, gerr := genCode(entry)
+			if gerr != nil {
+				fmt.Fprintf(os.Stderr, "%s\n", gerr)
+				os.Exit(1)
+			}
 			fmt.Printf("%s\n%s\n", entry.Password, pin)
 		} else {
 			fmt.Fprintf(os.Stderr, "%s\n", err)
@@ -789,6 +804,144 @@ func genWithMinTTL(un, secret string, minTTL uint) (pin string, tl uint) {
 		}
 		time.Sleep(time.Duration(d) * time.Second)
 	}
+}
+
+const (
+	// totpWindowSeconds matches the htotp default 30-second TOTP window.
+	totpWindowSeconds = 30
+	// noReusePadSeconds is how far into the target window --no-reuse emits,
+	// so a server clock that is slightly behind never sees a code from the
+	// future.
+	noReusePadSeconds = 2
+	// maxNoReuseWait bounds how long --no-reuse will sleep for a fresh
+	// window; beyond this the local clock has almost certainly jumped
+	// backwards relative to the recorded state.
+	maxNoReuseWait = 90 * time.Second
+)
+
+// noReuseState records, per config entry name, the last TOTP window index
+// (unix/30) that acc emitted, so a replay-protected verifier never sees the
+// same code twice.
+type noReuseState map[string]int64
+
+// noReuseStatePath resolves the --no-reuse state file: --state/$ACC_STATE if
+// set, else acc.state.json next to the config file.
+func noReuseStatePath() string {
+	if *State != "" {
+		return *State
+	}
+	return filepath.Join(filepath.Dir(*Cfg), "acc.state.json")
+}
+
+// readNoReuseState loads the state file; a missing file is an empty state, a
+// corrupt one is an error (silently resetting it could allow a reuse).
+func readNoReuseState(path string) (noReuseState, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return noReuseState{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("unable to read state file %s: %w", path, err)
+	}
+	st := noReuseState{}
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil, fmt.Errorf("unable to parse state file %s (delete it to reset): %w", path, err)
+	}
+	return st, nil
+}
+
+// writeNoReuseState persists st atomically (temp file + rename) with 0600
+// permissions.
+func writeNoReuseState(path string, st noReuseState) error {
+	data, err := json.Marshal(st)
+	if err != nil {
+		return fmt.Errorf("unable to encode state: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("unable to write state file %s: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("unable to replace state file %s: %w", path, err)
+	}
+	return nil
+}
+
+// decideNoReuseWindow picks the TOTP window to emit for an entry. lastEmitted
+// is the window recorded in the state file (0 = none yet; real window indices
+// are unix/30, always > 0). It returns the target window index and how long
+// to wait until noReusePadSeconds into it (0 = emit immediately).
+//
+// The current window is used only when it was not emitted before AND at least
+// minTTL seconds remain on it; otherwise the decision advances to the next
+// un-emitted window.
+func decideNoReuseWindow(lastEmitted int64, now time.Time, minTTL uint) (target int64, wait time.Duration, err error) {
+	if minTTL > totpWindowSeconds-noReusePadSeconds {
+		return 0, 0, fmt.Errorf("--min-ttl %d is too large with --no-reuse (max %d)", minTTL, totpWindowSeconds-noReusePadSeconds)
+	}
+	cur := now.Unix() / totpWindowSeconds
+	ttlCur := totpWindowSeconds - now.Unix()%totpWindowSeconds
+	switch {
+	case lastEmitted >= cur:
+		// Current window already emitted (or the clock moved backwards):
+		// advance past the recorded one.
+		target = lastEmitted + 1
+	case uint(ttlCur) < minTTL:
+		target = cur + 1
+	default:
+		target = cur
+	}
+	wait = time.Duration(target*totpWindowSeconds+noReusePadSeconds-now.Unix()) * time.Second
+	if wait < 0 {
+		wait = 0
+	}
+	if wait > maxNoReuseWait {
+		return 0, 0, fmt.Errorf("would have to wait %s for a fresh TOTP window (recorded window %d, current %d) — local clock jumped backwards? Delete the state file to reset", wait, lastEmitted, cur)
+	}
+	return target, wait, nil
+}
+
+// genWithNoReuse generates a TOTP for an entry, guaranteeing the emitted
+// window was never emitted before for that entry (recorded in statePath).
+// The window is recorded at emission time: if the code never reaches the
+// server, one window is simply skipped next time. now/sleep are injectable
+// for tests.
+func genWithNoReuse(name, secret string, minTTL uint, statePath string, now func() time.Time, sleep func(time.Duration)) (pin string, tl uint, err error) {
+	st, err := readNoReuseState(statePath)
+	if err != nil {
+		return "", 0, err
+	}
+	totp := htotp.NewDefaultTOTP(secret)
+	for range 4 {
+		target, wait, derr := decideNoReuseWindow(st[name], now(), minTTL)
+		if derr != nil {
+			return "", 0, derr
+		}
+		if wait > 0 {
+			sleep(wait)
+		}
+		pin = totp.At(int(target*totpWindowSeconds + noReusePadSeconds))
+		tl = uint(int((target+1)*totpWindowSeconds) - int(now().Unix()))
+		if tl > 0 && tl >= minTTL {
+			st[name] = target
+			if werr := writeNoReuseState(statePath, st); werr != nil {
+				return "", 0, werr
+			}
+			return pin, tl, nil
+		}
+		// Slept inaccurately or the clock moved; re-decide with fresh time.
+	}
+	return "", 0, fmt.Errorf("unable to generate a fresh TOTP window after several attempts")
+}
+
+// genCode generates the entry's TOTP honoring --min-ttl, and --no-reuse when
+// set (never emit the same window twice; state in the --state file).
+func genCode(entry ACConfigItem) (pin string, tl uint, err error) {
+	if *NoReuse {
+		return genWithNoReuse(entry.Name, entry.Secret, uint(*MinTTL), noReuseStatePath(), time.Now, time.Sleep)
+	}
+	pin, tl = genWithMinTTL(entry.Username, entry.Secret, uint(*MinTTL))
+	return pin, tl, nil
 }
 
 func ReadLogFile(LogFilePath, LogFilePattern string) (rv string) {

@@ -24,6 +24,8 @@ github.com/pschlump/goqrcode v1.1.0 h1:ydREbhRoJseXyWYrdovAuSR0Hg42i8x5g9+iPLqhp
 github.com/pschlump/goqrcode v1.1.0/go.mod h1:0cxt/9GKl7jslepqZ9jca2W/IV0Gq2mN/4lK3PfeJxo=
 github.com/pschlump/htotp v1.1.0 h1:+pA+sxU9kP1shDkRU1st8OXIAiWW4oNvBEim6V9M374=
 github.com/pschlump/htotp v1.1.0/go.mod h1:ED+Y0DKFB2nQaeeBLykLMWLhQf2vv0SMqrqbRSYyKIU=
+github.com/pschlump/htotp v1.1.1 h1:BIiqY0WXZqTriX6+Y8JfGfNZstR/fg+jxbkUM1EvXF8=
+github.com/pschlump/htotp v1.1.1/go.mod h1:0T7Ax+5QwKPjpRZ7Xjli5MsOPd9I5z0ES8Vm8PmxJs0=
 github.com/pschlump/json v1.12.1 h1:0E7lGxBvv7N+iY4p3/futCjRYAD62qpRL6+DdnZcSXY=
 github.com/pschlump/json v1.12.1/go.mod h1:O7hZ/dn2YrWqDT4CG8CJKJCSIv6Z+Lv1wINCA7BHeJA=
 github.com/pschlump/json5 v1.0.1 h1:RBE9L2VqLyUNJbaOxUehF2baXiFt+Dbd4p0C4PtWc5w=
