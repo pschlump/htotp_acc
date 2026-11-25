@@ -168,12 +168,203 @@ QR code written to: myserver.png
 `--qr-view` opens the file with `open` (Preview on macOS; `xdg-open` on Linux).
 The name accepts the same unique-substring match as the other commands.
 
+## Audit logging
+
+`acc` keeps an append-only audit log of every credential release
+(`--sudo-pipe`) and every config mutation (`--create-update`, `--enroll`,
+`--import`, `--delete`). It is **on by default and cannot be disabled** — there
+is deliberately no `--audit-disable`. Offline/emergency operation uses the
+`best-effort` policy, which still writes the local record.
+
+```
+$ acc --sudo-pipe "/myserver:phil" --min-ttl 10 --no-reuse \
+      --audit-reason "deploy v1.2" --audit-issue CHG-123 \
+      --audit-event-id-file /tmp/deploy.event-id \
+  | ssh phil@myserver "sudo -S -p '' id"
+```
+
+### What is (and is not) recorded
+
+`acc` can only attest to **credential release from this workstation**. It cannot
+know whether SSH connected, whether PAM accepted the password/TOTP, whether sudo
+succeeded, or what the remote command did. **Remote sshd, sudo and PAM logs stay
+authoritative for actual privileged command execution**, and they are still
+needed: manual entry, another workstation, console access, `ACC_PIPE=cat` or a
+modified `acc` binary all bypass workstation instrumentation. Every operator
+workstation that holds privileged credentials (for ExSMS: Philip's *and* Jake's)
+needs this binary and its own sink configuration.
+
+The log is **not tamper-proof against the workstation user**. Tamper
+resistance comes from shipping records off-host to an immutable store. No
+signature scheme is implemented.
+
+Never logged: passwords, TOTP seeds or codes, the encryption password, bearer
+tokens, config contents, provisioning URIs/QR data, parent-process arguments,
+environment values, response bodies from the sink, or a user-supplied entry name
+that failed to resolve (a pasted secret must not land in the log — only
+`entry_resolve_failed` is recorded).
+
+### Files, permissions, locking
+
+| File | Purpose |
+|---|---|
+| `<log>` (default `acc.audit.jsonl` next to `--cfg`) | JSON Lines, append-only, never rewritten |
+| `<log>.delivery.json` | delivery cursor (byte offset of the first unshipped record) |
+| `<log>.lock` | `flock(2)` lock serializing append, flush and rotate across processes |
+| `<log>.<UTC timestamp>` | archives from `--audit-rotate` |
+
+All are regular files, mode `0600`; symlinks and non-regular files are refused
+(an existing file with group/other permissions is refused too). A missing parent
+directory is created `0700`; an existing directory is never chmod'ed. Each
+record is one locked write followed by `fsync`; the cursor is replaced by temp
+file + `fsync` + rename. A corrupt or partially written log is a **loud failure
+that blocks credential release**, never skipped. The spool is capped at 64 MiB:
+at the limit new releases are refused until records are shipped and the log is
+rotated; nothing is truncated or dropped.
+
+### `--sudo-pipe` lifecycle
+
+1. A `requested` record is appended and fsynced **before** any TOTP is
+   generated or any `--no-reuse` window is burned. If this fails: no stdout,
+   exit 1.
+2. The entry is resolved and the code generated (`--min-ttl`/`--no-reuse`
+   unchanged). On failure a `blocked` record (static `error_code`) is appended,
+   exit 1, no stdout.
+3. An `emitted` record is appended and fsynced. It means *acc is about to
+   release / released the pair to stdout* — **not** that remote auth or sudo
+   succeeded.
+4. Delivery per policy (below). Under `require`, nothing is written to stdout
+   until the sink has accepted every record through `emitted`.
+5. If `--audit-event-id-file` was given, the event UUID plus a newline is
+   written atomically (0600). Failure means no stdout.
+6. Exactly `<password>\n<totp>\n` goes to stdout. Audit warnings only go to
+   stderr. The audit metadata is never an extra stdout line.
+
+If delivery or the event-ID file fails after `emitted`, credentials are
+withheld and a `blocked` record is appended, so the log honestly shows a record
+that was emitted-then-withheld. A crash can leave a `requested` with no final
+phase; `--audit-status` reports it as `unfinished_requests` rather than
+inventing an outcome.
+
+Config-change events (`acc.config_change`, action `create_update`, `enroll`,
+`import` or `delete`) append `requested` before the mutation (an audit failure
+prevents the change) and `applied` after the config is saved atomically. Only the
+canonical target (`/issuer:user`, issuer, account) is recorded — never the
+secret, password, URI or QR. A sink failure after a mutation leaves a pending
+record and a warning; the config is never rolled back for it.
+
+### Policies
+
+* **`best-effort`** (default): the local append is mandatory. Delivery is tried
+  within `--audit-timeout`; on failure all records stay pending, a sanitized
+  warning goes to stderr, and the credentials are still released (exit 0).
+* **`require`**: needs a sink (and a usable token file, if configured). Any
+  delivery failure → no credentials, exit 1; records remain pending.
+
+Under both policies a local append/fsync/cursor failure, event-ID-file failure
+or log-integrity failure always blocks the release. With **no sink** configured
+delivery mode is `local_only`: records are kept locally and do not count as
+pending for a nonexistent destination. A sink configured later ships only
+records appended after that point — there is **no backfill** of archived or
+pre-configuration records, so configure the sink before the audited operation.
+
+Exit codes: `2` usage/flag errors (including `--audit-policy require` without a
+sink, a bad sink URL, or incompatible flags); `1` operational failures; `0`
+success (including best-effort delivery failure with a successful release).
+
+### HTTPS receiver contract
+
+For each pending record, in append order:
+
+```
+POST <audit-sink>
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer <token>        (only if --audit-token-file is set)
+Idempotency-Key: <record_id>
+X-Acc-Audit-Record-Id: <record_id>
+
+<the exact JSONL record as one JSON object>
+```
+
+* Any `2xx` = accepted; the cursor advances only then.
+* Network errors, `408`, `429`, `5xx` are retryable; the record stays pending.
+* Any other status (including `3xx` — redirects are **never** followed) is a
+  receiver/configuration error: the record stays pending and the flush stops. A
+  poisoned record is never skipped.
+* **Receivers must be idempotent on `record_id`.** A crash after acceptance but
+  before the cursor update, or a lost cursor file, resends records.
+* HTTPS is required except for loopback test receivers. URLs with userinfo,
+  query string or fragment are rejected, and the URL is never printed. The
+  token file must be a regular, non-symlink `0600` file; one trailing newline is
+  trimmed. During `--sudo-pipe` `--audit-timeout` is one budget for all pending
+  records; `--audit-flush` applies it per request.
+
+### Record schema (`schema_version` 1)
+
+```json
+{
+  "schema_version": 1,
+  "record_id": "UUID, unique per JSONL record (the idempotency key)",
+  "event_id": "UUID shared by all phases of one operation",
+  "kind": "acc.sudo_release | acc.config_change",
+  "phase": "requested | emitted | blocked | applied",
+  "occurred_at": "RFC3339Nano UTC",
+  "tool": {"git_commit": "", "git_tag": "", "go_version": ""},
+  "workstation": {"hostname": "", "os": "", "arch": "", "username": ""},
+  "process": {"pid": 0, "ppid": 0, "parent_executable": "base name only", "terminal": false},
+  "request": {"min_ttl_seconds": 0, "no_reuse": false, "reason": "", "issue": ""},
+  "change": {"action": "create_update|enroll|import|delete", "reason": "", "issue": ""},
+  "target": {"entry": "/issuer:user", "issuer": "", "account": ""},
+  "audit": {"policy": "best-effort|require", "sink_configured": false},
+  "result": {"outcome": "requested|credentials_emitted|blocked|applied", "error_code": "optional"}
+}
+```
+
+`request` appears on `acc.sudo_release`, `change` on `acc.config_change`;
+`target` is absent when an entry could not be resolved. Versioning policy:
+adding optional fields keeps `schema_version`; removing/renaming a field or
+changing its meaning increments it. Receivers should ignore unknown fields.
+`error_code` values: `entry_resolve_failed`, `totp_generation_failed`,
+`config_unavailable`, `audit_sink_config_invalid`, `audit_delivery_failed`,
+`event_id_file_failed`, `config_write_failed`.
+
+### Operations
+
+```
+$ acc --audit-status     # {"schema_version":1,"records":8,"pending":2,"delivery_mode":"https",
+                         #  "oldest_pending_at":"...","sink_configured":true,
+                         #  "last_delivery":"retryable_error","unfinished_requests":0}
+$ acc --audit-flush      # retry in order; exit 0 only when nothing is pending
+$ acc --audit-rotate     # archive a fully shipped log, start a fresh 0600 log
+```
+
+These run **before** the authenticator config is created or decrypted: they work
+without `ACC_ENCRYPT_PW`, never generate a TOTP, and never create an empty
+config. `--audit-status` is content-free (no entry names, reasons, URLs, tokens).
+`last_delivery` is `accepted`, `pending`, `retryable_error`, `config_error` or
+`none`. `--audit-rotate` takes the same lock, verifies the log and cursor, refuses
+while anything is pending, hard-links the log to a never-overwritten
+`<log>.<UTC timestamp>` archive, swaps in a fresh log and reset cursor, and leaves
+the original untouched on any failure. Rotation of a log that is empty or absent
+is a no-op.
+
+**Safe retention:** rotate only after `--audit-status` shows `pending: 0`; copy
+the archive off-host (or confirm the immutable store already holds every
+`record_id`) before deleting it. Deleting archives is an operator decision;
+`acc` never deletes them.
+
 ## Environment variables
 
 | Variable | Description |
 |---|---|
 | `ACC_CFG` | Default config file path (overridden by `--cfg`). |
 | `ACC_ENCRYPT_PW` | Config encryption password (overridden by `--encrypted`). Required to read an encrypted config. |
+| `ACC_STATE` | `--no-reuse` state file (overridden by `--state`). |
+| `ACC_AUDIT_LOG` | Audit log path (overridden by `--audit-log`). |
+| `ACC_AUDIT_SINK` | HTTPS audit receiver URL (overridden by `--audit-sink`). |
+| `ACC_AUDIT_TOKEN_FILE` | File holding the sink bearer token (overridden by `--audit-token-file`). |
+| `ACC_AUDIT_POLICY` | `best-effort` (default) or `require` (overridden by `--audit-policy`). |
 | `ACC_TEST_SSH_HOST` | Tests only: enables the live `--check-time` test against this ssh host. |
 
 ## All flags
@@ -208,6 +399,17 @@ The name accepts the same unique-substring match as the other commands.
 | `--output <file>` | Write the generated code to a file. |
 | `--encrypted <pw>` | Encrypt the stored config data with this password (default `$ACC_ENCRYPT_PW`). |
 | `--db_flag <flags>` | Comma-separated debug flags (`dump-db-flag` to list). |
+| `--audit-log <file>` | JSONL audit log (default `$ACC_AUDIT_LOG`, else `acc.audit.jsonl` next to `--cfg`). |
+| `--audit-sink <url>` | HTTPS receiver for audit records (default `$ACC_AUDIT_SINK`; none = local-only). `--audit-sink ""` forces local-only. |
+| `--audit-token-file <file>` | File (mode 0600) with the sink bearer token (default `$ACC_AUDIT_TOKEN_FILE`). The token is never accepted on the command line. |
+| `--audit-policy <p>` | `best-effort` (default) or `require` (default `$ACC_AUDIT_POLICY`). |
+| `--audit-timeout <dur>` | Delivery timeout, `100ms`..`30s`, default `2s`. |
+| `--audit-reason <text>` | Optional reason recorded with the event (max 512 bytes, no control characters). |
+| `--audit-issue <text>` | Optional issue/incident/change reference (max 128 bytes). |
+| `--audit-event-id-file <file>` | With `--sudo-pipe`: write the release's event UUID (0600) for a deployment wrapper. |
+| `--audit-status` | Print one content-free JSON status object. Standalone. |
+| `--audit-flush` | Retry pending sink delivery in order; exit 0 only if nothing remains pending. Standalone. |
+| `--audit-rotate` | Archive a fully shipped log and start a fresh one. Standalone. |
 | `--version` | Print version information. |
 | `--help` | Print usage. |
 

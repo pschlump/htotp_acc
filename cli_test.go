@@ -47,7 +47,8 @@ func runAcc(t *testing.T, args ...string) (stdout, stderr string, exitCode int) 
 
 // runAccEnv runs the compiled CLI with extra environment variables. The ACC_*
 // variables are always scrubbed from the inherited environment first, so a
-// developer's own ACC_CFG/ACC_ENCRYPT_PW cannot leak into a test.
+// developer's own ACC_* settings (cfg, encryption password, audit log/sink/
+// token/policy, state) cannot leak into a test.
 func runAccEnv(t *testing.T, extraEnv map[string]string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	cmd := exec.Command(accBin, args...)
@@ -57,7 +58,7 @@ func runAccEnv(t *testing.T, extraEnv map[string]string, args ...string) (stdout
 
 	env := make([]string, 0, len(os.Environ()))
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "ACC_CFG=") || strings.HasPrefix(kv, "ACC_ENCRYPT_PW=") {
+		if strings.HasPrefix(kv, "ACC_") {
 			continue
 		}
 		env = append(env, kv)

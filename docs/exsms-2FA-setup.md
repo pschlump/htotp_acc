@@ -43,6 +43,70 @@ Yes to all three parts:
    so it never appears in the command line. `--min-ttl 10` guarantees the code
    has at least 10 seconds left before sudo sees it.
 
+## Audit logging for credential release (Philip and Jake)
+
+Production deploys and recovery run `acc --sudo-pipe ... | ssh HOST "sudo -S ..."`.
+Both Philip and Jake have privileged production access from their own
+workstations, so **both workstations need this `acc` build and an independent
+sink configuration**. `acc` now records every release locally *before* the
+password/TOTP is written (see the README "Audit logging" section for the full
+flag list, record schema and receiver contract).
+
+```bash
+# initial rollout: durable local spool, best-effort shipping
+export ACC_AUDIT_SINK=https://audit.exsms.example.invalid/acc      # placeholder host
+export ACC_AUDIT_TOKEN_FILE=~/.pjs/acc-audit.token                 # 0600, provisioned out of band
+acc --sudo-pipe "/exsms-1:phil" --min-ttl 10 --no-reuse \
+    --audit-reason "deploy canary" --audit-issue CHG-123 \
+    --audit-event-id-file "$DEPLOY_DIR/acc.event-id" \
+  | ssh phil@canary-host.example.invalid "sudo -S -p '' true"
+
+# later, once the receiver and alerting are proven: refuse to release unless
+# the sink accepted the record first
+acc --sudo-pipe "/exsms-1:phil" --audit-policy require ...
+```
+
+Four correlated evidence sources make up the ExSMS audit trail; `acc` supplies
+only the first:
+
+1. `acc` credential-release events (each operator workstation) — *this change*;
+2. remote sshd authentication/session records;
+3. remote sudo/PAM accepted/rejected command records;
+4. deployment/change manifests or break-glass result records.
+
+`emitted` means "acc released the pair to stdout", **not** that SSH connected,
+PAM accepted the code, or sudo ran anything. Remote sshd/sudo/PAM logs remain
+authoritative for what actually executed. A local log is also not tamper-proof
+against the workstation user — off-host delivery to immutable retention is the
+tamper-resistance layer. Nothing secret is written to the log (no password, TOTP
+seed/code, encryption password, token, config body or parent arguments).
+
+**Correlation.** `--audit-event-id-file` writes the release's `event_id` (UUID,
+mode 0600, never on the credential stdout stream). The deploy wrapper should copy
+that UUID into the deployment manifest; match it to the remote `sshd`/`sudo` log
+lines by workstation `hostname`/`username` and the `occurred_at` window of the
+`emitted` record.
+
+**Emergency / offline.** There is no switch to turn auditing off. With the sink
+unreachable, `best-effort` (the default) still writes the local record, releases
+the credentials, warns on stderr and leaves the records pending; run
+`acc --audit-flush` when connectivity returns. Check `acc --audit-status`
+(`pending`, `oldest_pending_at`, `unfinished_requests`) and rotate with
+`acc --audit-rotate` only when nothing is pending; copy archives off-host before
+deleting anything locally.
+
+**Follow-up (not deployed by this change):**
+
+- Makefile/deploy wrappers capture `--audit-event-id-file` and add the UUID to
+  deployment manifests.
+- Use `--audit-policy require` for normal production deploys only after the
+  receiver and retry/alerting are proven; start with durable best-effort spool.
+- Off-host alerts for pending age, repeated `require` failures, and credential
+  release without a matching remote sudo session.
+- Jake receives the same binary/capability with his own token and sink config.
+- The receiver must be idempotent on `record_id` (records can be resent after a
+  crash or cursor loss).
+
 ## Caveats
 
 - **Clock skew** — the machine running `acc` and the server must have synced

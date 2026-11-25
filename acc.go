@@ -141,6 +141,26 @@ $ acc --sudo-pipe myserver | ssh phil@myserver 'sudo -S id'
 $ echo "Same, but never reuse a window (replay-protected servers)"
 $ acc --sudo-pipe myserver --no-reuse | ssh phil@myserver 'sudo -S id'
 
+$ echo "Audited release with a reason, writing the event UUID for a deploy manifest"
+$ acc --sudo-pipe myserver --audit-reason "deploy v1.2" --audit-issue CHG-123 --audit-event-id-file /tmp/ev.id | ssh phil@myserver 'sudo -S id'
+
+$ echo "Require the remote audit sink to accept the record before releasing credentials"
+$ acc --sudo-pipe myserver --audit-policy require --audit-sink https://audit.example.com/acc | ssh phil@myserver 'sudo -S id'
+
+$ echo "Inspect / retry / rotate the audit log"
+$ acc --audit-status
+$ acc --audit-flush
+$ acc --audit-rotate
+
+Audit logging (--sudo-pipe and config changes):
+
+	Every --sudo-pipe writes durable local records to the audit log BEFORE
+	credentials are released.  The log defaults to $ACC_AUDIT_LOG, else
+	acc.audit.jsonl next to --cfg.  Optional HTTPS shipping uses
+	$ACC_AUDIT_SINK, $ACC_AUDIT_TOKEN_FILE and $ACC_AUDIT_POLICY
+	(best-effort|require).  There is deliberately no switch to disable
+	auditing.  Records say what acc released, not whether sudo succeeded.
+
 Notes:
 
 	Config file defaults to $ACC_CFG (or ./acc.cfg.json).
@@ -175,6 +195,23 @@ Notes:
 		os.Exit(0)
 	}
 
+	// Audit setup.  Audit-only actions run here, before any config file is
+	// created or decrypted, and never generate a TOTP.
+	if err := auditUsageCheck(); err != nil {
+		usageExit(err)
+	}
+	var ac *auditConfig
+	auditOnly := *AuditStatus || *AuditFlush || *AuditRotate
+	if auditOnly || *SudoPipe != "" || *Import != "" || *LogFilePath != "" || *CreateUpdate != "" || *Delete != "" || *Enroll != "" {
+		var err error
+		if ac, err = resolveAuditConfig(); err != nil {
+			usageExit(err)
+		}
+	}
+	if auditOnly {
+		os.Exit(runAuditAction(ac))
+	}
+
 	// Resolve the config-encryption password: flag wins, then the environment.
 	encPassword = *Encrypted
 	if encPassword == "" {
@@ -187,17 +224,20 @@ Notes:
 			encData, err := EncryptString([]byte("[]"), encPassword) // encrypted empty entry list
 			if err != nil {
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data: %s\n", err)
+				sudoConfigFail(ac)
 				os.Exit(1)
 			}
 			err = os.WriteFile(*Cfg, []byte(fmt.Sprintf(`{"ac_config_item":[],"encrypted_data":%q,"encrypted":"y"}`, encData)), 0600)
 			if err != nil {
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data file: %s Error:%s\n", *Cfg, err)
+				sudoConfigFail(ac)
 				os.Exit(1)
 			}
 		} else {
 			err := os.WriteFile(*Cfg, []byte(`{"ac_config_item":[]}`), 0600)
 			if err != nil {
 				dbgo.Fprintf(os.Stderr, "%(red)Unable to create empty encrypted data file: %s Error:%s\n", *Cfg, err)
+				sudoConfigFail(ac)
 				os.Exit(1)
 			}
 		}
@@ -209,6 +249,7 @@ Notes:
 	err := ReadConfig.ReadFile(*Cfg, &gCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to read configuration: %s error %s\n", *Cfg, err)
+		sudoConfigFail(ac)
 		os.Exit(1)
 	}
 
@@ -219,15 +260,18 @@ Notes:
 	if gCfg.Encrypted == "y" || gCfg.EncryptedData != "" {
 		if encPassword == "" {
 			fmt.Fprintf(os.Stderr, "Config file %s is encrypted: supply the password via --encrypted or $ACC_ENCRYPT_PW\n", *Cfg)
+			sudoConfigFail(ac)
 			os.Exit(1)
 		}
 		dec, err := DecryptString(gCfg.EncryptedData, encPassword)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Unable to decrypt configuration: %s (wrong password?)\n", err)
+			sudoConfigFail(ac)
 			os.Exit(1)
 		}
 		if err := json.Unmarshal(dec, &gCfg.Local); err != nil {
 			fmt.Fprintf(os.Stderr, "Unable to parse decrypted configuration: %s\n", err)
+			sudoConfigFail(ac)
 			os.Exit(1)
 		}
 	}
@@ -320,6 +364,7 @@ Notes:
 		// decoder only accepts uppercase.
 		newCfg.Secret = strings.ToUpper(qq.Get("secret"))
 
+		beginConfigAudit(ac, "import", newCfg)
 		if pos := InConfig(gCfg.Local, newCfg.Name); pos == -1 {
 			if db8 {
 				fmt.Printf("Did not find\n")
@@ -372,6 +417,7 @@ Notes:
 		if db8 {
 			fmt.Printf("Config is: %s\n", dbgo.SVarI(newCfg))
 		}
+		beginConfigAudit(ac, "create_update", newCfg)
 
 		if pos := InConfig(gCfg.Local, newCfg.Name); pos == -1 {
 			if db8 {
@@ -414,6 +460,7 @@ Notes:
 			}
 
 			newCfg.Name = gCfg.Local[pos].Name
+			beginConfigAudit(ac, "delete", gCfg.Local[pos])
 			gCfg.Local = goTemplateTools.RemoveFromSlice(gCfg.Local, pos)
 
 			WriteConfig(gCfg)
@@ -505,19 +552,9 @@ Notes:
 
 	} else if *SudoPipe != "" {
 
-		// Print "<password>\n<totp>\n" for piping into 'sudo -S'.
-		if pos, err := ResolveName(gCfg.Local, *SudoPipe); err == nil {
-			entry := gCfg.Local[pos]
-			pin, _, gerr := genCode(entry)
-			if gerr != nil {
-				fmt.Fprintf(os.Stderr, "%s\n", gerr)
-				os.Exit(1)
-			}
-			fmt.Printf("%s\n%s\n", entry.Password, pin)
-		} else {
-			fmt.Fprintf(os.Stderr, "%s\n", err)
-			os.Exit(1)
-		}
+		// Print "<password>\n<totp>\n" for piping into 'sudo -S'.  Every
+		// invocation is audited (see audit_cli.go: runSudoPipe).
+		runSudoPipe(ac)
 
 	} else if *Enroll != "" {
 
@@ -534,6 +571,8 @@ Notes:
 			Realm:    *Issuer,
 			Digits:   0,
 		}
+		// Only the canonical target is audited - never the generated secret.
+		beginConfigAudit(ac, "enroll", newCfg)
 		if pos := InConfig(gCfg.Local, newCfg.Name); pos == -1 {
 			gCfg.Local = append(gCfg.Local, newCfg)
 		} else {
@@ -734,11 +773,13 @@ func WriteConfig(gCfg GlobalConfigData) {
 		plaintext, err := json.Marshal(gCfg.Local)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error on marshal config: %s\n", err)
+			writeConfigFailed()
 			os.Exit(1)
 		}
 		enctext, err := EncryptString(plaintext, encPassword)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error on encrypt config: %s\n", err)
+			writeConfigFailed()
 			os.Exit(1)
 		}
 		gCfg.Local = []ACConfigItem{}
@@ -750,12 +791,40 @@ func WriteConfig(gCfg GlobalConfigData) {
 		fmt.Fprintf(os.Stderr, "Raw ->%s<- to file %s\n", dbgo.SVarI(gCfg), fn)
 	}
 	//	gCfg.WrittenAtTimstamp = xxxxx
-	err := os.WriteFile(fn, []byte(dbgo.SVarI(gCfg)), 0600)
+	err := saveConfigFile(fn, []byte(dbgo.SVarI(gCfg)))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error on write file: %s error: %s\n", fn, err)
 		fmt.Fprintf(os.Stderr, "Failed to import!\n")
+		writeConfigFailed()
 		os.Exit(1)
 	}
+	if pendingCfgAudit != nil {
+		pendingCfgAudit.applied()
+		pendingCfgAudit = nil
+	}
+}
+
+// writeConfigFailed records a failed config save in the audit log.
+func writeConfigFailed() {
+	if pendingCfgAudit != nil {
+		pendingCfgAudit.failed()
+		pendingCfgAudit = nil
+	}
+}
+
+// saveConfigFile writes the config atomically (temp file + fsync + rename, 0600)
+// so a crash cannot leave a truncated authenticator config.  A symlinked
+// config is written through to its target.  If the directory does not allow a
+// temp file it falls back to an in-place write.
+func saveConfigFile(fn string, data []byte) error {
+	target := fn
+	if resolved, err := filepath.EvalSymlinks(fn); err == nil {
+		target = resolved
+	}
+	if err := writeFileAtomic(target, data, ""); err == nil {
+		return nil
+	}
+	return os.WriteFile(target, data, 0600)
 }
 
 // ResolveName finds an entry by exact name (with or without the leading "/"),
