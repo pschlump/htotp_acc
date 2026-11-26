@@ -280,7 +280,7 @@ Set `--audit-sink-format loki` (or `ACC_AUDIT_SINK_FORMAT=loki`) and use the
 full push endpoint, for example:
 
 ```
-export ACC_AUDIT_SINK=https://ops-box.agenticquartz.com/loki/api/v1/push
+export ACC_AUDIT_SINK=https://ops-box.agenticquartz.com/loki/loki/api/v1/push
 export ACC_AUDIT_SINK_FORMAT=loki
 export ACC_AUDIT_TOKEN_FILE=/path/to/0600-token-file
 acc --audit-flush
@@ -290,7 +290,10 @@ Each Loki request has one stream with `job=acc`, the event `kind`, and the
 `workstation` hostname as labels. Its value timestamp is `occurred_at` in
 nanoseconds and its log line is the unchanged audit JSON event. Start with
 `best-effort`, verify delivery and querying, then use `require` if credential
-release must fail closed on a Loki outage.
+release must fail closed on a Loki outage. The doubled prefix above is specific
+to the current ops-box Caddy route: Caddy strips the first `/loki`, and Loki
+expects the second. A proxy that preserves the path should use the standard
+single-`/loki` push URL instead.
 
 For each pending record, in append order:
 
@@ -355,7 +358,8 @@ changing its meaning increments it. Receivers should ignore unknown fields.
 $ acc --audit-status     # {"schema_version":1,"records":8,"pending":2,"delivery_mode":"https",
                          #  "oldest_pending_at":"...","sink_configured":true,
                          #  "last_delivery":"retryable_error","unfinished_requests":0}
-$ acc --audit-flush      # retry in order; exit 0 only when nothing is pending
+$ acc --audit-flush      # retry in order; exit 0 only when nothing is pending;
+                         # includes content-free http_status when the sink replied
 $ acc --audit-rotate     # archive a fully shipped log, start a fresh 0600 log
 ```
 
@@ -422,7 +426,7 @@ the archive off-host (or confirm the immutable store already holds every
 | `--db_flag <flags>` | Comma-separated debug flags (`dump-db-flag` to list). |
 | `--audit-log <file>` | JSONL audit log (default `$ACC_AUDIT_LOG`, else `acc.audit.jsonl` next to `--cfg`). |
 | `--audit-sink <url>` | HTTPS receiver for audit records (default `$ACC_AUDIT_SINK`; none = local-only). `--audit-sink ""` forces local-only. |
-| `--audit-sink-format <format>` | `json` (default) or `loki`; default `$ACC_AUDIT_SINK_FORMAT`. Loki requires the full `/loki/api/v1/push` endpoint. |
+| `--audit-sink-format <format>` | `json` (default) or `loki`; default `$ACC_AUDIT_SINK_FORMAT`. Use Loki's push API URL, including any reverse-proxy prefix. |
 | `--audit-token-file <file>` | File (mode 0600) with the sink bearer token (default `$ACC_AUDIT_TOKEN_FILE`). The token is never accepted on the command line. |
 | `--audit-policy <p>` | `best-effort` (default) or `require` (default `$ACC_AUDIT_POLICY`). |
 | `--audit-timeout <dur>` | Delivery timeout, `100ms`..`30s`, default `2s`. |

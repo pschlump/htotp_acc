@@ -16,7 +16,7 @@ import (
 
 var AuditLog = flag.String("audit-log", "", "JSONL audit log. Defaults to $ACC_AUDIT_LOG, else acc.audit.jsonl next to --cfg.")
 var AuditSink = flag.String("audit-sink", "", "Optional HTTPS audit event receiver. Defaults to $ACC_AUDIT_SINK. Empty means local-only logging.")
-var AuditSinkFormat = flag.String("audit-sink-format", "", "Sink payload: json|loki. Defaults to $ACC_AUDIT_SINK_FORMAT, else json. For Loki, use the /loki/api/v1/push URL.")
+var AuditSinkFormat = flag.String("audit-sink-format", "", "Sink payload: json|loki. Defaults to $ACC_AUDIT_SINK_FORMAT, else json. For Loki, use its push API URL, including any reverse-proxy prefix.")
 var AuditTokenFile = flag.String("audit-token-file", "", "File (0600) holding the sink bearer token. Defaults to $ACC_AUDIT_TOKEN_FILE.")
 var AuditPolicy = flag.String("audit-policy", "", "best-effort|require. Defaults to $ACC_AUDIT_POLICY, else best-effort. Local append is mandatory under both; require also needs remote acceptance before credentials are released.")
 var AuditTimeout = flag.Duration("audit-timeout", auditDefaultTimeout, "Per-delivery-attempt timeout (100ms..30s). One total budget for --sudo-pipe, per request for --audit-flush.")
@@ -198,7 +198,11 @@ func runAuditAction(ac *auditConfig) int {
 			fmt.Fprintf(os.Stderr, "acc: audit flush failed: %s\n", err)
 			return 1
 		}
-		printJSON(map[string]any{"schema_version": 1, "outcome": res.Outcome, "pending": res.Pending})
+		out := map[string]any{"schema_version": 1, "outcome": res.Outcome, "pending": res.Pending}
+		if res.HTTPStatus != 0 {
+			out["http_status"] = res.HTTPStatus
+		}
+		printJSON(out)
 		if res.Pending > 0 {
 			fmt.Fprintf(os.Stderr, "acc: audit flush incomplete (%s): %d record(s) remain pending\n", res.Outcome, res.Pending)
 			return 1

@@ -111,17 +111,17 @@ func encodeLokiRecord(body []byte) ([]byte, error) {
 }
 
 // postAuditRecord sends one record and classifies the outcome.
-func postAuditRecord(ctx context.Context, client *http.Client, sink, format, token, recordID string, body []byte) string {
+func postAuditRecord(ctx context.Context, client *http.Client, sink, format, token, recordID string, body []byte) (string, int) {
 	if format == auditSinkLoki {
 		var err error
 		body, err = encodeLokiRecord(body)
 		if err != nil {
-			return deliveryConfigError
+			return deliveryConfigError, 0
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sink, bytes.NewReader(body))
 	if err != nil {
-		return deliveryConfigError
+		return deliveryConfigError, 0
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -133,24 +133,25 @@ func postAuditRecord(ctx context.Context, client *http.Client, sink, format, tok
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return deliveryRetryable // network error / timeout
+		return deliveryRetryable, 0 // network error / timeout
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 	_ = resp.Body.Close()
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		return deliveryAccepted
+		return deliveryAccepted, resp.StatusCode
 	case resp.StatusCode == http.StatusRequestTimeout, resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode >= 500:
-		return deliveryRetryable
+		return deliveryRetryable, resp.StatusCode
 	default:
-		return deliveryConfigError // other 4xx, 3xx: receiver/config problem
+		return deliveryConfigError, resp.StatusCode // other 4xx, 3xx: receiver/config problem
 	}
 }
 
 type shipResult struct {
-	Outcome string // accepted, retryable_error, config_error
-	Pending int    // records still pending after this attempt
-	Reached bool   // every record through upTo (or all, if upTo is "") accepted
+	Outcome    string // accepted, retryable_error, config_error
+	Pending    int    // records still pending after this attempt
+	Reached    bool   // every record through upTo (or all, if upTo is "") accepted
+	HTTPStatus int    // last sink response, or 0 for a local/network failure
 }
 
 // ship delivers pending records in order. total selects the budget model:
@@ -225,7 +226,8 @@ func (l *auditLogger) ship(client *http.Client, total bool, upToID string) (ship
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		body := st.data[r.start : r.end-1] // exact record, without the newline
-		out := postAuditRecord(ctx, client, l.cfg.SinkURL, l.cfg.resolvedSinkFormat(), token, r.id, body)
+		out, httpStatus := postAuditRecord(ctx, client, l.cfg.SinkURL, l.cfg.resolvedSinkFormat(), token, r.id, body)
+		res.HTTPStatus = httpStatus
 		cancel()
 		if out != deliveryAccepted {
 			record(out)
