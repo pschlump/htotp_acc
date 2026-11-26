@@ -15,7 +15,8 @@ import (
 )
 
 var AuditLog = flag.String("audit-log", "", "JSONL audit log. Defaults to $ACC_AUDIT_LOG, else acc.audit.jsonl next to --cfg.")
-var AuditSink = flag.String("audit-sink", "", "Optional HTTPS JSON event receiver. Defaults to $ACC_AUDIT_SINK. Empty means local-only logging.")
+var AuditSink = flag.String("audit-sink", "", "Optional HTTPS audit event receiver. Defaults to $ACC_AUDIT_SINK. Empty means local-only logging.")
+var AuditSinkFormat = flag.String("audit-sink-format", "", "Sink payload: json|loki. Defaults to $ACC_AUDIT_SINK_FORMAT, else json. For Loki, use the /loki/api/v1/push URL.")
 var AuditTokenFile = flag.String("audit-token-file", "", "File (0600) holding the sink bearer token. Defaults to $ACC_AUDIT_TOKEN_FILE.")
 var AuditPolicy = flag.String("audit-policy", "", "best-effort|require. Defaults to $ACC_AUDIT_POLICY, else best-effort. Local append is mandatory under both; require also needs remote acceptance before credentials are released.")
 var AuditTimeout = flag.Duration("audit-timeout", auditDefaultTimeout, "Per-delivery-attempt timeout (100ms..30s). One total budget for --sudo-pipe, per request for --audit-flush.")
@@ -66,6 +67,13 @@ func resolveAuditConfig() (*auditConfig, error) {
 		if err := validateSinkURL(c.SinkURL); err != nil {
 			return nil, err
 		}
+	}
+	c.SinkFormat = strings.TrimSpace(auditPick("audit-sink-format", AuditSinkFormat, "ACC_AUDIT_SINK_FORMAT"))
+	if c.SinkFormat == "" {
+		c.SinkFormat = auditSinkJSON
+	}
+	if c.SinkFormat != auditSinkJSON && c.SinkFormat != auditSinkLoki {
+		return nil, errors.New("--audit-sink-format must be json or loki")
 	}
 	c.TokenFile = auditPick("audit-token-file", AuditTokenFile, "ACC_AUDIT_TOKEN_FILE")
 

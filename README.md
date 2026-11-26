@@ -274,6 +274,24 @@ success (including best-effort delivery failure with a successful release).
 
 ### HTTPS receiver contract
 
+The default `json` sink format sends each pending record to a generic receiver.
+The `loki` sink format instead wraps the same record in Loki's native push API.
+Set `--audit-sink-format loki` (or `ACC_AUDIT_SINK_FORMAT=loki`) and use the
+full push endpoint, for example:
+
+```
+export ACC_AUDIT_SINK=https://ops-box.agenticquartz.com/loki/api/v1/push
+export ACC_AUDIT_SINK_FORMAT=loki
+export ACC_AUDIT_TOKEN_FILE=/path/to/0600-token-file
+acc --audit-flush
+```
+
+Each Loki request has one stream with `job=acc`, the event `kind`, and the
+`workstation` hostname as labels. Its value timestamp is `occurred_at` in
+nanoseconds and its log line is the unchanged audit JSON event. Start with
+`best-effort`, verify delivery and querying, then use `require` if credential
+release must fail closed on a Loki outage.
+
 For each pending record, in append order:
 
 ```
@@ -284,7 +302,7 @@ Authorization: Bearer <token>        (only if --audit-token-file is set)
 Idempotency-Key: <record_id>
 X-Acc-Audit-Record-Id: <record_id>
 
-<the exact JSONL record as one JSON object>
+<the exact JSONL record as one JSON object, or its Loki push wrapper>
 ```
 
 * Any `2xx` = accepted; the cursor advances only then.
@@ -292,8 +310,10 @@ X-Acc-Audit-Record-Id: <record_id>
 * Any other status (including `3xx` — redirects are **never** followed) is a
   receiver/configuration error: the record stays pending and the flush stops. A
   poisoned record is never skipped.
-* **Receivers must be idempotent on `record_id`.** A crash after acceptance but
-  before the cursor update, or a lost cursor file, resends records.
+* A crash after acceptance but before the cursor update, or a lost cursor file,
+  resends records. Generic JSON receivers must be idempotent on `record_id`.
+  Loki does not deduplicate push requests, so retries are at-least-once and
+  consumers must use the line's `record_id` to recognize duplicates.
 * HTTPS is required except for loopback test receivers. URLs with userinfo,
   query string or fragment are rejected, and the URL is never printed. The
   token file must be a regular, non-symlink `0600` file; one trailing newline is
@@ -363,6 +383,7 @@ the archive off-host (or confirm the immutable store already holds every
 | `ACC_STATE` | `--no-reuse` state file (overridden by `--state`). |
 | `ACC_AUDIT_LOG` | Audit log path (overridden by `--audit-log`). |
 | `ACC_AUDIT_SINK` | HTTPS audit receiver URL (overridden by `--audit-sink`). |
+| `ACC_AUDIT_SINK_FORMAT` | `json` (default) or `loki` (overridden by `--audit-sink-format`). |
 | `ACC_AUDIT_TOKEN_FILE` | File holding the sink bearer token (overridden by `--audit-token-file`). |
 | `ACC_AUDIT_POLICY` | `best-effort` (default) or `require` (overridden by `--audit-policy`). |
 | `ACC_TEST_SSH_HOST` | Tests only: enables the live `--check-time` test against this ssh host. |
@@ -401,6 +422,7 @@ the archive off-host (or confirm the immutable store already holds every
 | `--db_flag <flags>` | Comma-separated debug flags (`dump-db-flag` to list). |
 | `--audit-log <file>` | JSONL audit log (default `$ACC_AUDIT_LOG`, else `acc.audit.jsonl` next to `--cfg`). |
 | `--audit-sink <url>` | HTTPS receiver for audit records (default `$ACC_AUDIT_SINK`; none = local-only). `--audit-sink ""` forces local-only. |
+| `--audit-sink-format <format>` | `json` (default) or `loki`; default `$ACC_AUDIT_SINK_FORMAT`. Loki requires the full `/loki/api/v1/push` endpoint. |
 | `--audit-token-file <file>` | File (mode 0600) with the sink bearer token (default `$ACC_AUDIT_TOKEN_FILE`). The token is never accepted on the command line. |
 | `--audit-policy <p>` | `best-effort` (default) or `require` (default `$ACC_AUDIT_POLICY`). |
 | `--audit-timeout <dur>` | Delivery timeout, `100ms`..`30s`, default `2s`. |

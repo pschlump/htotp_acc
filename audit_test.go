@@ -779,6 +779,61 @@ func readRecordsFromBodies(t *testing.T, r *receiver) []map[string]any {
 	return out
 }
 
+func TestAudit_LokiSink(t *testing.T) {
+	f := newAuditFixture(t)
+	r := newReceiver(t)
+	tok := writeToken(t, f.dir, canaryBearer)
+	out, errOut, code := f.sudo("--audit-sink", r.srv.URL, "--audit-sink-format", "loki",
+		"--audit-token-file", tok, "--audit-policy", "require")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut)
+	}
+	twoLines(t, out)
+	reqs := r.requests()
+	local := readRecords(t, f.log)
+	if len(reqs) != 2 || len(local) != 2 {
+		t.Fatalf("got %d requests and %d local records, want 2 of each", len(reqs), len(local))
+	}
+	for i, q := range reqs {
+		var push lokiPush
+		if err := json.Unmarshal(q.body, &push); err != nil {
+			t.Fatalf("request %d is not a Loki push: %v", i, err)
+		}
+		if len(push.Streams) != 1 || len(push.Streams[0].Values) != 1 {
+			t.Fatalf("request %d payload = %+v, want one stream and value", i, push)
+		}
+		stream := push.Streams[0]
+		if stream.Stream["job"] != "acc" || stream.Stream["kind"] != str(local[i], "kind") ||
+			stream.Stream["workstation"] != str(local[i], "workstation", "hostname") {
+			t.Errorf("request %d labels = %v", i, stream.Stream)
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(stream.Values[0][1]), &event); err != nil {
+			t.Fatalf("request %d log line is not the audit event: %v", i, err)
+		}
+		if str(event, "record_id") != str(local[i], "record_id") || q.hdr.Get("Idempotency-Key") != str(local[i], "record_id") {
+			t.Errorf("request %d does not carry the local record", i)
+		}
+		at, err := time.Parse(time.RFC3339Nano, str(local[i], "occurred_at"))
+		if err != nil || stream.Values[0][0] != fmt.Sprint(at.UnixNano()) {
+			t.Errorf("request %d timestamp = %q, want occurred_at in nanoseconds", i, stream.Values[0][0])
+		}
+		assertNoSecrets(t, "Loki request", string(q.body))
+	}
+	if s := f.status("--audit-sink", r.srv.URL); s.Pending != 0 || s.LastDelivery != "accepted" {
+		t.Errorf("status = %+v", s)
+	}
+}
+
+func TestAudit_SinkFormatRules(t *testing.T) {
+	f := newAuditFixture(t)
+	out, errOut, code := f.sudo("--audit-sink-format", "xml")
+	assertNoCredentials(t, out)
+	if code != 2 || !strings.Contains(errOut, "must be json or loki") {
+		t.Fatalf("exit %d, stderr %q; want a sink-format usage error", code, errOut)
+	}
+}
+
 func TestAudit_SinkURLRules(t *testing.T) {
 	f := newAuditFixture(t)
 	for _, tc := range []struct{ name, url string }{

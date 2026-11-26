@@ -41,6 +41,9 @@ const (
 	policyBestEffort = "best-effort"
 	policyRequire    = "require"
 
+	auditSinkJSON = "json"
+	auditSinkLoki = "loki"
+
 	auditMaxReason = 512
 	auditMaxIssue  = 128
 
@@ -72,6 +75,7 @@ var (
 type auditConfig struct {
 	LogPath     string
 	SinkURL     string
+	SinkFormat  string
 	TokenFile   string
 	Policy      string
 	Timeout     time.Duration
@@ -84,6 +88,12 @@ func (c *auditConfig) lockPath() string   { return c.LogPath + ".lock" }
 func (c *auditConfig) cursorPath() string { return c.LogPath + ".delivery.json" }
 func (c *auditConfig) sinkConfigured() bool {
 	return c.SinkURL != ""
+}
+func (c *auditConfig) resolvedSinkFormat() string {
+	if c.SinkFormat == "" {
+		return auditSinkJSON
+	}
+	return c.SinkFormat
 }
 func (c *auditConfig) deliveryMode() string {
 	if c.sinkConfigured() {

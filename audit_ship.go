@@ -2,18 +2,20 @@ package main
 
 // HTTPS shipping of audit records.
 //
-// Each pending record is POSTed in append order with an Idempotency-Key equal
-// to its record_id; the durable cursor advances only after a 2xx. A failure
-// stops the flush at that record - nothing is ever skipped or dropped. Error
-// text never includes the URL, token, or any response body.
+// Each pending record is POSTed in append order as a JSON event or a native
+// Loki push. The durable cursor advances only after a 2xx. A failure stops the
+// flush at that record - nothing is ever skipped or dropped. Error text never
+// includes the URL, token, or any response body.
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -69,8 +71,54 @@ func loadAuditToken(path string) (string, error) {
 	return tok, nil
 }
 
+type lokiPush struct {
+	Streams []lokiStream `json:"streams"`
+}
+
+type lokiStream struct {
+	Stream map[string]string `json:"stream"`
+	Values [][2]string       `json:"values"`
+}
+
+func encodeLokiRecord(body []byte) ([]byte, error) {
+	var rec struct {
+		OccurredAt  string `json:"occurred_at"`
+		Kind        string `json:"kind"`
+		Workstation struct {
+			Hostname string `json:"hostname"`
+		} `json:"workstation"`
+	}
+	if err := json.Unmarshal(body, &rec); err != nil || rec.Kind == "" {
+		return nil, errors.New("audit record cannot be encoded for Loki")
+	}
+	at, err := time.Parse(time.RFC3339Nano, rec.OccurredAt)
+	if err != nil {
+		return nil, errors.New("audit record has an invalid timestamp for Loki")
+	}
+	hostname := rec.Workstation.Hostname
+	if hostname == "" {
+		hostname = "unknown"
+	}
+	payload := lokiPush{Streams: []lokiStream{{
+		Stream: map[string]string{"job": "acc", "kind": rec.Kind, "workstation": hostname},
+		Values: [][2]string{{strconv.FormatInt(at.UnixNano(), 10), string(body)}},
+	}}}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, errors.New("audit record cannot be encoded for Loki")
+	}
+	return encoded, nil
+}
+
 // postAuditRecord sends one record and classifies the outcome.
-func postAuditRecord(ctx context.Context, client *http.Client, sink, token, recordID string, body []byte) string {
+func postAuditRecord(ctx context.Context, client *http.Client, sink, format, token, recordID string, body []byte) string {
+	if format == auditSinkLoki {
+		var err error
+		body, err = encodeLokiRecord(body)
+		if err != nil {
+			return deliveryConfigError
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, sink, bytes.NewReader(body))
 	if err != nil {
 		return deliveryConfigError
@@ -177,7 +225,7 @@ func (l *auditLogger) ship(client *http.Client, total bool, upToID string) (ship
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), budget)
 		body := st.data[r.start : r.end-1] // exact record, without the newline
-		out := postAuditRecord(ctx, client, l.cfg.SinkURL, token, r.id, body)
+		out := postAuditRecord(ctx, client, l.cfg.SinkURL, l.cfg.resolvedSinkFormat(), token, r.id, body)
 		cancel()
 		if out != deliveryAccepted {
 			record(out)
@@ -188,7 +236,7 @@ func (l *auditLogger) ship(client *http.Client, total bool, upToID string) (ship
 		cur.LastDeliveryAt = time.Now().UTC().Format(time.RFC3339)
 		if err := writeCursor(l.cfg.cursorPath(), cur); err != nil {
 			// The sink accepted the record but the cursor did not advance: it
-			// stays pending and will be resent (receivers dedupe on record_id).
+			// stays pending and will be resent with the same record_id.
 			return res, err
 		}
 		if upToID != "" && cur.Offset >= upToEnd {
